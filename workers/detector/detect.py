@@ -75,18 +75,15 @@ def main():
     threshold = args.threshold
     model, kind = load_model(args.model)
     if model is None:
-        out = {}
-        for fr in frames:
-            fid = fr["frame_id"]
-            # synthetic fallback when model not available: one person per frame above threshold
-            if threshold <= 0.92:
-                out[fid] = [{"label": "person", "confidence": 0.92, "bbox_x": 0.30, "bbox_y": 0.20, "bbox_width": 0.20, "bbox_height": 0.40}]
-            else:
-                out[fid] = []
-        with open(args.output, "w") as outf:
-            json.dump(out, outf)
-        print("no model loaded, returning synthetic detections", file=sys.stderr)
-        return 0
+        print("FATAL: ultralytics not installed or model failed to load; failing loud (no synthetic fallback)", file=sys.stderr)
+        # Do not write fake detections - let Go mark FAILED
+        # Write empty output for debugging but exit non-zero
+        try:
+            with open(args.output, "w") as outf:
+                json.dump({}, outf)
+        except:
+            pass
+        sys.exit(2)
     out = detect_with_yolo(model, frames, threshold)
     with open(args.output, "w") as outf:
         json.dump(out, outf)

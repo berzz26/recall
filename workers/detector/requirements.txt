@@ -1,0 +1,10 @@
+# ReCall YOLO detector - Option A (real local inference)
+# Install in isolated venv: python3 -m venv .venv && source .venv/bin/activate && pip install -r workers/detector/requirements.txt
+# Pre-download model: .venv/bin/python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+ultralytics
+torch
+torchvision
+opencv-python
+numpy
+pillow
+onnxruntime

@@ -185,7 +185,13 @@ func TestYoloIntegrationSkippedIfNoModel(t *testing.T) {
 	segSvc := video_segment.NewService(video_segment.NewRepository(db.DB), 30*time.Second)
 	frameSvc := video_frame.NewService(video_frame.NewRepository(db.DB), store, 2*time.Second, "ffmpeg", 30*time.Second, 85)
 	detRepo := detection.NewRepository(db.DB)
-	yolo := detector.NewYoloDetector("python3", script, "", 0.25)
+	venvPython := "/home/berzz/recall/workers/detector/.venv/bin/python"
+	modelPath := "/home/berzz/recall/workers/detector/yolov8n.pt"
+	if _, err := os.Stat(venvPython); err != nil {
+		venvPython = "python3"
+		modelPath = ""
+	}
+	yolo := detector.NewYoloDetector(venvPython, script, modelPath, 0.25)
 	visualSvc := visual.NewService(detRepo, video_frame.NewRepository(db.DB), store, yolo, 0.25, "yolov8n", "1")
 	srcType := video.SourceTypeLocal
 	v, _ := videoSvc.CreateVideo(ctx, "video1.mp4", nil, nil, nil, &srcType, &videoPath)

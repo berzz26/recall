@@ -2,3 +2,16 @@
 .env
 bin/
 storage/*
+storage/
+.venv
+**/.venv/
+workers/detector/yolov8n.pt
+*.pt
+*.onnx
+*.weights
+services/web/node_modules/
+services/web/dist/
+workers/detector/__pycache__/
+__pycache__/
+*.log
+.tmp/
