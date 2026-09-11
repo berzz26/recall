@@ -13,6 +13,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/config"
 	"github.com/berzz26/recall/services/api/internal/detection"
 	"github.com/berzz26/recall/services/api/internal/detector"
+	"github.com/berzz26/recall/services/api/internal/handlers"
 	"github.com/berzz26/recall/services/api/internal/health"
 	local_source "github.com/berzz26/recall/services/api/internal/local_source"
 	"github.com/berzz26/recall/services/api/internal/processing"
@@ -23,6 +24,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/video_segment"
 	"github.com/berzz26/recall/services/api/internal/visual"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 )
@@ -119,6 +121,11 @@ func main() {
 	})
 
 	app.Use(recover.New())
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "*",
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
+		AllowMethods: "GET,POST,DELETE,OPTIONS",
+	}))
 	if cfg.Env == "development" {
 		app.Use(logger.New(logger.Config{
 			Format: "[${time}] ${status} - ${latency} ${method} ${path}\n",
@@ -127,9 +134,16 @@ func main() {
 
 	app.Get("/health", healthHandler.Check)
 
+	detailHandler := handlers.NewVideoDetailHandler(videoMediaRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, store)
+
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 	v1.Mount("/videos", videoHandler.SetupRoutes())
+	v1.Get("/videos/:id/media", detailHandler.GetMedia)
+	v1.Get("/videos/:id/segments", detailHandler.GetSegments)
+	v1.Get("/videos/:id/frames", detailHandler.GetFrames)
+	v1.Get("/videos/:id/detections", detailHandler.GetDetections)
+	v1.Get("/videos/:id/frames/:frameId/image", detailHandler.GetFrameImage)
 	v1.Post("/ingest/local", videoHandler.IngestLocal)
 	v1.Mount("/local-sources", localSourceHandler.SetupRoutes())
 
