@@ -2,6 +2,7 @@ package video
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -17,6 +18,33 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) Create(c *fiber.Ctx) error {
+	contentType := c.Get("Content-Type")
+	if strings.Contains(contentType, "multipart/form-data") {
+		file, err := c.FormFile("file")
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "file is required"})
+		}
+		src, err := file.Open()
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "failed to open file"})
+		}
+		defer src.Close()
+
+		mimeType := file.Header.Get("Content-Type")
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+
+		ctx, cancel := context.WithTimeout(c.UserContext(), 30*time.Second)
+		defer cancel()
+
+		v, err := h.service.UploadVideo(ctx, file.Filename, src, mimeType)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.Status(fiber.StatusCreated).JSON(v)
+	}
+
 	var req CreateVideoRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
@@ -87,4 +115,30 @@ func (h *Handler) Delete(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to delete video"})
 	}
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *Handler) IngestLocal(c *fiber.Ctx) error {
+	var req struct {
+		Directory string `json:"directory"`
+		Path      string `json:"path"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
+	}
+	dir := req.Directory
+	if dir == "" {
+		dir = req.Path
+	}
+	if dir == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "directory is required"})
+	}
+
+	ctx, cancel := context.WithTimeout(c.UserContext(), 30*time.Second)
+	defer cancel()
+
+	count, err := h.service.IngestLocalDirectory(ctx, dir)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"ingested": count, "directory": dir})
 }

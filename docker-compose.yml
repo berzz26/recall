@@ -25,6 +25,9 @@ services:
       - .env
     environment:
       DATABASE_URL: postgres://recall:recall@postgres:5432/recall?sslmode=disable
+      STORAGE_ROOT: ./storage
+    volumes:
+      - ./storage:/app/storage
     depends_on:
       postgres:
         condition: service_healthy

@@ -10,6 +10,7 @@ import (
 	"github.com/berzz26/recall/pkg/database"
 	"github.com/berzz26/recall/services/api/internal/config"
 	"github.com/berzz26/recall/services/api/internal/health"
+	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
@@ -30,8 +31,15 @@ func main() {
 
 	slog.Info("database connected", "env", cfg.Env)
 
+	store, err := storage.NewLocalStorage(cfg.StorageRoot)
+	if err != nil {
+		slog.Error("failed to create storage", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("storage initialized", "root", store.Root())
+
 	videoRepo := video.NewRepository(db.DB)
-	videoService := video.NewService(videoRepo)
+	videoService := video.NewServiceWithStorage(videoRepo, store)
 	videoHandler := video.NewHandler(videoService)
 
 	healthHandler := health.NewHandler(db.DB)
@@ -58,6 +66,7 @@ func main() {
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 	v1.Mount("/videos", videoHandler.SetupRoutes())
+	v1.Post("/ingest/local", videoHandler.IngestLocal)
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

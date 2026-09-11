@@ -11,6 +11,7 @@ type Config struct {
 	Port        string
 	Addr        string
 	DatabaseURL string
+	StorageRoot string
 }
 
 func Load() Config {
@@ -31,10 +32,16 @@ func Load() Config {
 		dbURL = "postgres://recall:recall@localhost:5436/recall?sslmode=disable"
 	}
 
+	storageRoot := os.Getenv("STORAGE_ROOT")
+	if storageRoot == "" {
+		storageRoot = "./storage"
+	}
+
 	return Config{
 		Env:         env,
 		Port:        port,
 		Addr:        ":" + port,
 		DatabaseURL: dbURL,
+		StorageRoot: storageRoot,
 	}
 }

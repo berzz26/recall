@@ -103,6 +103,28 @@ func (r *Repository) UpdateStatus(ctx context.Context, id uuid.UUID, status Stat
 	return scanVideo(row)
 }
 
+func (r *Repository) UpdateUpload(ctx context.Context, id uuid.UUID, storageKey, contentHash, mimeType string, sizeBytes int64, status Status) (*Video, error) {
+	query := fmt.Sprintf(`
+		UPDATE videos SET storage_key = $2, content_hash = $3, mime_type = $4, size_bytes = $5, status = $6, updated_at = now()
+		WHERE id = $1
+		RETURNING %s
+	`, videoFields)
+	row := r.db.QueryRow(ctx, query, id, storageKey, contentHash, mimeType, sizeBytes, status)
+	return scanVideo(row)
+}
+
+func (r *Repository) GetBySourcePath(ctx context.Context, sourcePath string) (*Video, error) {
+	query := fmt.Sprintf(`SELECT %s FROM videos WHERE source_path = $1 AND source_type = $2 LIMIT 1`, videoFields)
+	row := r.db.QueryRow(ctx, query, sourcePath, SourceTypeLocal)
+	return scanVideo(row)
+}
+
+func (r *Repository) ExistsBySourcePath(ctx context.Context, sourcePath string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM videos WHERE source_path = $1 AND source_type = $2)`, sourcePath, SourceTypeLocal).Scan(&exists)
+	return exists, err
+}
+
 func (r *Repository) Count(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM videos`).Scan(&count)
