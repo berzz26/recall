@@ -3,6 +3,7 @@ package video
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,7 +18,7 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
-const videoFields = `id, filename, content_hash, mime_type, size_bytes, source_type, source_path, storage_key, source_mtime, status, created_at, updated_at`
+const videoFields = `id, filename, content_hash, mime_type, size_bytes, source_type, source_path, storage_key, source_mtime, processing_error, status, created_at, updated_at`
 
 func scanVideo(row interface{ Scan(dest ...any) error }) (*Video, error) {
 	var v Video
@@ -31,6 +32,7 @@ func scanVideo(row interface{ Scan(dest ...any) error }) (*Video, error) {
 		&v.SourcePath,
 		&v.StorageKey,
 		&v.SourceMtime,
+		&v.ProcessingError,
 		&v.Status,
 		&v.CreatedAt,
 		&v.UpdatedAt,
@@ -157,6 +159,45 @@ func (r *Repository) GetByContentHash(ctx context.Context, hash string) ([]Video
 		list = []Video{}
 	}
 	return list, nil
+}
+
+func (r *Repository) ClaimNext(ctx context.Context) (*Video, error) {
+	query := fmt.Sprintf(`
+		UPDATE videos SET status = $1, updated_at = now()
+		WHERE id = (
+			SELECT id FROM videos WHERE status = $2 ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
+		)
+		RETURNING %s
+	`, videoFields)
+	row := r.db.QueryRow(ctx, query, StatusProcessing, StatusUploaded)
+	v, err := scanVideo(row)
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return v, nil
+}
+
+func (r *Repository) MarkReady(ctx context.Context, id uuid.UUID) (*Video, error) {
+	query := fmt.Sprintf(`
+		UPDATE videos SET status = $2, processing_error = NULL, updated_at = now()
+		WHERE id = $1
+		RETURNING %s
+	`, videoFields)
+	row := r.db.QueryRow(ctx, query, id, StatusReady)
+	return scanVideo(row)
+}
+
+func (r *Repository) MarkFailed(ctx context.Context, id uuid.UUID, errMsg string) (*Video, error) {
+	query := fmt.Sprintf(`
+		UPDATE videos SET status = $2, processing_error = $3, updated_at = now()
+		WHERE id = $1
+		RETURNING %s
+	`, videoFields)
+	row := r.db.QueryRow(ctx, query, id, StatusFailed, errMsg)
+	return scanVideo(row)
 }
 
 func (r *Repository) Count(ctx context.Context) (int64, error) {

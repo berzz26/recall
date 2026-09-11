@@ -18,6 +18,7 @@ type Config struct {
 	MaxUploadSize      int64
 	StabilitySeconds   int
 	StabilityDuration  time.Duration
+	PollInterval       time.Duration
 }
 
 func Load() Config {
@@ -58,6 +59,13 @@ func Load() Config {
 		}
 	}
 
+	pollInterval := 2 * time.Second
+	if v := os.Getenv("PROCESSING_POLL_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			pollInterval = d
+		}
+	}
+
 	return Config{
 		Env:               env,
 		Port:              port,
@@ -67,5 +75,6 @@ func Load() Config {
 		MaxUploadSize:     maxUploadSize,
 		StabilitySeconds:  stabilitySeconds,
 		StabilityDuration: time.Duration(stabilitySeconds) * time.Second,
+		PollInterval:      pollInterval,
 	}
 }

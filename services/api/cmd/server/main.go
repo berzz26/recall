@@ -11,6 +11,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/config"
 	"github.com/berzz26/recall/services/api/internal/health"
 	local_source "github.com/berzz26/recall/services/api/internal/local_source"
+	"github.com/berzz26/recall/services/api/internal/processing"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/gofiber/fiber/v2"
@@ -53,6 +54,11 @@ func main() {
 		slog.Error("failed to start watchers", "error", err)
 	}
 
+	processor := &processing.NoopProcessor{}
+	worker := processing.NewWorker(videoService, processor, cfg.PollInterval)
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	go worker.Start(workerCtx)
+
 	app := fiber.New(fiber.Config{
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
@@ -92,6 +98,7 @@ func main() {
 	<-sigCtx.Done()
 	slog.Info("shutdown signal received, shutting down")
 
+	workerCancel()
 	localSourceService.StopAllWatchers()
 
 	if err := app.Shutdown(); err != nil {

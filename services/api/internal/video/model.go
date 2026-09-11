@@ -24,16 +24,17 @@ const (
 )
 
 type Video struct {
-	ID          uuid.UUID  `json:"id"`
-	Filename    string     `json:"filename"`
-	ContentHash string     `json:"content_hash"`
-	MimeType    string     `json:"mime_type"`
-	SizeBytes   int64      `json:"size_bytes"`
-	SourceType  SourceType `json:"source_type"`
-	SourcePath  *string    `json:"source_path"`
-	StorageKey  *string    `json:"storage_key"`
-	SourceMtime *time.Time `json:"source_mtime"`
-	Status      Status     `json:"status"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID              uuid.UUID  `json:"id"`
+	Filename        string     `json:"filename"`
+	ContentHash     string     `json:"content_hash"`
+	MimeType        string     `json:"mime_type"`
+	SizeBytes       int64      `json:"size_bytes"`
+	SourceType      SourceType `json:"source_type"`
+	SourcePath      *string    `json:"source_path"`
+	StorageKey      *string    `json:"storage_key"`
+	SourceMtime     *time.Time `json:"source_mtime"`
+	ProcessingError *string    `json:"processing_error"`
+	Status          Status     `json:"status"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }

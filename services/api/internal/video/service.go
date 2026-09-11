@@ -298,6 +298,22 @@ func (s *Service) GetByContentHash(ctx context.Context, hash string) ([]Video, e
 	return s.repo.GetByContentHash(ctx, hash)
 }
 
+func (s *Service) ClaimNext(ctx context.Context) (*Video, error) {
+	v, err := s.repo.ClaimNext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+func (s *Service) MarkReady(ctx context.Context, id uuid.UUID) (*Video, error) {
+	return s.repo.MarkReady(ctx, id)
+}
+
+func (s *Service) MarkFailed(ctx context.Context, id uuid.UUID, errMsg string) (*Video, error) {
+	return s.repo.MarkFailed(ctx, id, errMsg)
+}
+
 func (s *Service) ExistsBySourcePath(ctx context.Context, path string) (bool, error) {
 	return s.repo.ExistsBySourcePath(ctx, path)
 }
