@@ -85,3 +85,27 @@ export interface Health {
   status: string
   database: string
 }
+
+export interface Track {
+  id: string
+  video_id: string
+  segment_id: string | null
+  label: string
+  track_index: number
+  start_timestamp: number
+  end_timestamp: number
+  tracker_name: string
+  tracker_version: string
+  created_at: string
+  updated_at: string
+  detection_count: number
+}
+
+export interface TrackDetection {
+  id: string
+  track_id: string
+  detection_id: string
+  frame_id: string
+  timestamp_seconds: number
+  created_at: string
+}

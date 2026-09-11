@@ -22,6 +22,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
+	"github.com/berzz26/recall/services/api/internal/video_track"
 	"github.com/berzz26/recall/services/api/internal/visual"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -85,6 +86,9 @@ func main() {
 	yolo := detector.NewYoloDetector(cfg.PythonPath, scriptPath, cfg.ModelPath, cfg.DetectionThreshold)
 	visualService := visual.NewService(detectionRepo, videoFrameRepo, store, yolo, cfg.DetectionThreshold, cfg.DetectorName, cfg.DetectorVersion)
 
+	trackRepo := video_track.NewRepository(db.DB)
+	trackService := video_track.NewServiceWithDeps(trackRepo, videoFrameRepo, detectionRepo, nil)
+
 	localSourceRepo := local_source.NewRepository(db.DB)
 	localSourceService := local_source.NewService(localSourceRepo, videoService, cfg.StabilityDuration)
 	localSourceHandler := local_source.NewHandler(localSourceService)
@@ -105,7 +109,7 @@ func main() {
 		slog.Warn("ffmpeg not found, frame extraction will fail", "path", cfg.FFmpegPath, "error", err)
 	}
 
-	processor := processing.NewFFprobeProcessorWithVisual(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService, visualService)
+	processor := processing.NewFFprobeProcessorWithTracking(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService, visualService, trackService)
 	worker := processing.NewWorker(videoService, processor, cfg.PollInterval)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	go worker.Start(workerCtx)
@@ -134,7 +138,7 @@ func main() {
 
 	app.Get("/health", healthHandler.Check)
 
-	detailHandler := handlers.NewVideoDetailHandler(videoMediaRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, store)
+	detailHandler := handlers.NewVideoDetailHandlerWithTracks(videoMediaRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, store)
 
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
@@ -144,6 +148,8 @@ func main() {
 	v1.Get("/videos/:id/frames", detailHandler.GetFrames)
 	v1.Get("/videos/:id/detections", detailHandler.GetDetections)
 	v1.Get("/videos/:id/frames/:frameId/image", detailHandler.GetFrameImage)
+	v1.Get("/videos/:id/tracks", detailHandler.GetTracks)
+	v1.Get("/tracks/:trackId/detections", detailHandler.GetTrackDetections)
 	v1.Post("/ingest/local", videoHandler.IngestLocal)
 	v1.Mount("/local-sources", localSourceHandler.SetupRoutes())
 
