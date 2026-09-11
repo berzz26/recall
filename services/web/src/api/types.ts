@@ -124,3 +124,14 @@ export interface Event {
   created_at: string
   updated_at: string
 }
+
+export interface SegmentDescription {
+  id: string
+  video_id: string
+  segment_id: string
+  description: string
+  model_name: string
+  model_version: string
+  created_at: string
+  updated_at: string
+}

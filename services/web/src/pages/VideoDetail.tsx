@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { client } from '../api/client'
-import type { Video, MediaMetadata, Segment, Frame, Detection, Track, Event } from '../api/types'
+import type { Video, MediaMetadata, Segment, Frame, Detection, Track, Event, SegmentDescription } from '../api/types'
 import { StatusBadge } from '../components/StatusBadge'
 import { Loading, ErrorState } from '../components/Loading'
 
@@ -17,6 +17,7 @@ export default function VideoDetail() {
   const [selectedTrack, setSelectedTrack] = useState<number | 'all'>('all')
   const [events, setEvents] = useState<Event[]>([])
   const [eventFilter, setEventFilter] = useState<string>('all')
+  const [descriptions, setDescriptions] = useState<SegmentDescription[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [selectedFrame, setSelectedFrame] = useState<Frame | null>(null)
 
@@ -42,6 +43,7 @@ export default function VideoDetail() {
         setDetToTrack(map)
       } catch { setTracks([]); setDetToTrack({}) }
       try { setEvents(await client.get<Event[]>(`/api/v1/videos/${id}/events`)) } catch { setEvents([]) }
+      try { setDescriptions(await client.get<SegmentDescription[]>(`/api/v1/videos/${id}/descriptions`)) } catch { setDescriptions([]) }
       setErr(null)
     } catch (e: any) { setErr(e.message) }
   }
@@ -110,14 +112,14 @@ export default function VideoDetail() {
         <h3>Timeline / Segments ({segments.length})</h3>
         {segments.length > 0 && (
           <div className="timeline">
-            {segments.map(s => <div key={s.id} className="seg" style={{ flex: s.duration }}>S{s.segment_index}</div>)}
+            {segments.map(s => <div key={s.id} id={`seg-${s.id}`} className="seg" style={{ flex: s.duration }}>S{s.segment_index}</div>)}
           </div>
         )}
         <table className="table">
           <thead><tr><th>Segment</th><th>Start</th><th>End</th><th>Duration</th><th>Frames</th><th>Detections</th></tr></thead>
           <tbody>
             {segments.map(s => (
-              <tr key={s.id}><td>{s.segment_index}</td><td>{s.start_time.toFixed(2)}s</td><td>{s.end_time.toFixed(2)}s</td><td>{s.duration.toFixed(2)}s</td><td>{frameCountBySeg[s.id] || 0}</td><td>{detCountBySeg[s.id] || 0}</td></tr>
+              <tr key={s.id} id={`seg-row-${s.id}`}><td>{s.segment_index}</td><td>{s.start_time.toFixed(2)}s</td><td>{s.end_time.toFixed(2)}s</td><td>{s.duration.toFixed(2)}s</td><td>{frameCountBySeg[s.id] || 0}</td><td>{detCountBySeg[s.id] || 0}</td></tr>
             ))}
           </tbody>
         </table>
@@ -235,6 +237,37 @@ export default function VideoDetail() {
           </tbody>
         </table>
         {events.length === 0 && <div className="empty">No events</div>}
+      </div>
+
+      <div className="card">
+        <h3>Scene Descriptions ({descriptions.length})</h3>
+        {descriptions.length === 0 ? <div className="empty">No descriptions — waiting for processing or VLM unavailable</div> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {descriptions
+              .slice()
+              .sort((a, b) => {
+                const sa = segments.find(s => s.id === a.segment_id)?.start_time ?? 0
+                const sb = segments.find(s => s.id === b.segment_id)?.start_time ?? 0
+                return sa - sb
+              })
+              .map(d => {
+                const seg = segments.find(s => s.id === d.segment_id)
+                const timeLabel = seg ? `${seg.start_time.toFixed(0)}s → ${seg.end_time.toFixed(0)}s` : d.segment_id.slice(0, 8)
+                return (
+                  <div key={d.id} style={{ padding: 12, background: '#0f1115', border: '1px solid #2a2e39', borderRadius: 6, cursor: seg ? 'pointer' : 'default' }} onClick={() => {
+                    if (!seg) return
+                    const el = document.getElementById(`seg-${seg.id}`)
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    // also highlight frames by briefly setting selectedTrack to relevant? keep simple
+                  }}>
+                    <div style={{ fontSize: 11, color: '#9aa0b0', marginBottom: 4 }}>{timeLabel} — Segment {seg?.segment_index ?? '?'}</div>
+                    <div style={{ fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>"{d.description}"</div>
+                    <div style={{ fontSize: 11, color: '#9aa0b0', marginTop: 6 }}>Model: {d.model_name} v{d.model_version}</div>
+                  </div>
+                )
+              })}
+          </div>
+        )}
       </div>
 
       <div className="card">
