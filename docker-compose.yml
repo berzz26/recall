@@ -1,0 +1,13 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+
+    ports:
+      - "8081:${APP_PORT}"
+
+    env_file:
+      - .env
+
+    restart: unless-stopped
