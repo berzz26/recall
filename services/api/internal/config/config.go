@@ -26,6 +26,11 @@ type Config struct {
 	FFmpegPath          string
 	FFmpegTimeout       time.Duration
 	FrameJPEGQuality    int
+	DetectionThreshold  float64
+	DetectorName        string
+	DetectorVersion     string
+	ModelPath           string
+	PythonPath          string
 }
 
 func Load() Config {
@@ -133,6 +138,32 @@ func Load() Config {
 		}
 	}
 
+	detectionThreshold := 0.25
+	if v := os.Getenv("DETECTION_CONFIDENCE_THRESHOLD"); v != "" {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+			if parsed < 0 || parsed > 1 {
+				panic(fmt.Sprintf("DETECTION_CONFIDENCE_THRESHOLD must be 0..1, got %s", v))
+			}
+			detectionThreshold = parsed
+		} else {
+			panic(fmt.Sprintf("invalid DETECTION_CONFIDENCE_THRESHOLD %q: %v", v, err))
+		}
+	}
+
+	detectorName := os.Getenv("DETECTOR_NAME")
+	if detectorName == "" {
+		detectorName = "yolov8n"
+	}
+	detectorVersion := os.Getenv("DETECTOR_VERSION")
+	if detectorVersion == "" {
+		detectorVersion = "1"
+	}
+	modelPath := os.Getenv("MODEL_PATH")
+	pythonPath := os.Getenv("PYTHON_PATH")
+	if pythonPath == "" {
+		pythonPath = "python3"
+	}
+
 	return Config{
 		Env:               env,
 		Port:              port,
@@ -150,5 +181,10 @@ func Load() Config {
 		FFmpegPath:          ffmpegPath,
 		FFmpegTimeout:       ffmpegTimeout,
 		FrameJPEGQuality:    frameJPEGQuality,
+		DetectionThreshold:  detectionThreshold,
+		DetectorName:        detectorName,
+		DetectorVersion:     detectorVersion,
+		ModelPath:           modelPath,
+		PythonPath:          pythonPath,
 	}
 }

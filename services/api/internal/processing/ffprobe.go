@@ -18,6 +18,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
+	"github.com/berzz26/recall/services/api/internal/visual"
 )
 
 type FFprobeProcessor struct {
@@ -27,6 +28,7 @@ type FFprobeProcessor struct {
 	mediaService   *video_media.Service
 	segmentService *video_segment.Service
 	frameService   *video_frame.Service
+	visualService  *visual.Service
 }
 
 func NewFFprobeProcessor(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service) *FFprobeProcessor {
@@ -54,6 +56,14 @@ func NewFFprobeProcessorWithFrames(ffprobePath string, timeout time.Duration, st
 	p := NewFFprobeProcessor(ffprobePath, timeout, store, mediaService)
 	p.segmentService = segmentService
 	p.frameService = frameService
+	return p
+}
+
+func NewFFprobeProcessorWithVisual(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service, segmentService *video_segment.Service, frameService *video_frame.Service, visualService *visual.Service) *FFprobeProcessor {
+	p := NewFFprobeProcessor(ffprobePath, timeout, store, mediaService)
+	p.segmentService = segmentService
+	p.frameService = frameService
+	p.visualService = visualService
 	return p
 }
 
@@ -310,6 +320,12 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 		}
 		if _, err := p.frameService.GenerateForVideo(ctx, v, segments, *meta.DurationSeconds, w, h); err != nil {
 			return fmt.Errorf("failed to extract frames: %w", err)
+		}
+	}
+
+	if p.visualService != nil {
+		if _, err := p.visualService.AnalyzeVideo(ctx, v.ID); err != nil {
+			return fmt.Errorf("failed to analyze visuals: %w", err)
 		}
 	}
 

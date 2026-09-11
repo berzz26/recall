@@ -6,10 +6,13 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/berzz26/recall/pkg/database"
 	"github.com/berzz26/recall/services/api/internal/config"
+	"github.com/berzz26/recall/services/api/internal/detection"
+	"github.com/berzz26/recall/services/api/internal/detector"
 	"github.com/berzz26/recall/services/api/internal/health"
 	local_source "github.com/berzz26/recall/services/api/internal/local_source"
 	"github.com/berzz26/recall/services/api/internal/processing"
@@ -18,6 +21,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
+	"github.com/berzz26/recall/services/api/internal/visual"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
@@ -57,6 +61,28 @@ func main() {
 	videoFrameRepo := video_frame.NewRepository(db.DB)
 	videoFrameService := video_frame.NewService(videoFrameRepo, store, cfg.FrameSampleInterval, cfg.FFmpegPath, cfg.FFmpegTimeout, cfg.FrameJPEGQuality)
 
+	detectionRepo := detection.NewRepository(db.DB)
+	scriptPath := filepath.Join("workers", "detector", "detect.py")
+	if _, err := os.Stat(scriptPath); err != nil {
+		if abs, err2 := filepath.Abs(scriptPath); err2 == nil {
+			if _, err3 := os.Stat(abs); err3 == nil {
+				scriptPath = abs
+			}
+		}
+		if _, err := os.Stat(scriptPath); err != nil {
+			alt := "/home/berzz/recall/workers/detector/detect.py"
+			if _, err2 := os.Stat(alt); err2 == nil {
+				scriptPath = alt
+			}
+		}
+	} else {
+		if abs, err := filepath.Abs(scriptPath); err == nil {
+			scriptPath = abs
+		}
+	}
+	yolo := detector.NewYoloDetector(cfg.PythonPath, scriptPath, cfg.ModelPath, cfg.DetectionThreshold)
+	visualService := visual.NewService(detectionRepo, videoFrameRepo, store, yolo, cfg.DetectionThreshold, cfg.DetectorName, cfg.DetectorVersion)
+
 	localSourceRepo := local_source.NewRepository(db.DB)
 	localSourceService := local_source.NewService(localSourceRepo, videoService, cfg.StabilityDuration)
 	localSourceHandler := local_source.NewHandler(localSourceService)
@@ -77,7 +103,7 @@ func main() {
 		slog.Warn("ffmpeg not found, frame extraction will fail", "path", cfg.FFmpegPath, "error", err)
 	}
 
-	processor := processing.NewFFprobeProcessorWithFrames(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService)
+	processor := processing.NewFFprobeProcessorWithVisual(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService, visualService)
 	worker := processing.NewWorker(videoService, processor, cfg.PollInterval)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	go worker.Start(workerCtx)
