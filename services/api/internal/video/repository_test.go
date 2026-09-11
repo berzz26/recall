@@ -3,6 +3,7 @@ package video
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -81,7 +82,7 @@ func TestVideoLocalSource(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 
-	path := "/cctv/camera-01/incident.mp4"
+	path := filepath.Join(t.TempDir(), "incident.mp4")
 	created, err := repo.Create(ctx, "incident.mp4", "hashlocal123", "video/mp4", 999, SourceTypeLocal, &path)
 	if err != nil {
 		t.Fatalf("Create LOCAL failed: %v", err)
@@ -145,7 +146,8 @@ func TestVideoListEmpty(t *testing.T) {
 	ctx := context.Background()
 
 	_, _ = repo.Create(ctx, "a.mp4", "hash1", "video/mp4", 100, SourceTypeUpload, nil)
-	_, _ = repo.Create(ctx, "b.mp4", "hash2", "video/mp4", 200, SourceTypeLocal, strPtr("/tmp/b.mp4"))
+	tmpPath := filepath.Join(t.TempDir(), "b.mp4")
+	_, _ = repo.Create(ctx, "b.mp4", "hash2", "video/mp4", 200, SourceTypeLocal, &tmpPath)
 
 	list, err := repo.List(ctx, 5, 0)
 	if err != nil {

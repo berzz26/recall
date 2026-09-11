@@ -298,6 +298,19 @@ func (s *Service) GetByContentHash(ctx context.Context, hash string) ([]Video, e
 	return s.repo.GetByContentHash(ctx, hash)
 }
 
+func (s *Service) ExistsBySourcePath(ctx context.Context, path string) (bool, error) {
+	return s.repo.ExistsBySourcePath(ctx, path)
+}
+
+func (s *Service) CreateLocalFromPath(ctx context.Context, path string) (*Video, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	filename := filepath.Base(abs)
+	return s.CreateVideo(ctx, filename, nil, nil, nil, func() *SourceType { s := SourceTypeLocal; return &s }(), &abs)
+}
+
 func (s *Service) DeleteVideo(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return errors.New("invalid id")

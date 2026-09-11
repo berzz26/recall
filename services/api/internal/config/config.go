@@ -3,17 +3,21 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	Env           string
-	Port          string
-	Addr          string
-	DatabaseURL   string
-	StorageRoot   string
-	MaxUploadSize int64
+	Env                string
+	Port               string
+	Addr               string
+	DatabaseURL        string
+	StorageRoot        string
+	MaxUploadSize      int64
+	StabilitySeconds   int
+	StabilityDuration  time.Duration
 }
 
 func Load() Config {
@@ -47,12 +51,21 @@ func Load() Config {
 		}
 	}
 
+	stabilitySeconds := 5
+	if v := os.Getenv("LOCAL_FILE_STABILITY_SECONDS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			stabilitySeconds = parsed
+		}
+	}
+
 	return Config{
-		Env:           env,
-		Port:          port,
-		Addr:          ":" + port,
-		DatabaseURL:   dbURL,
-		StorageRoot:   storageRoot,
-		MaxUploadSize: maxUploadSize,
+		Env:               env,
+		Port:              port,
+		Addr:              ":" + port,
+		DatabaseURL:       dbURL,
+		StorageRoot:       storageRoot,
+		MaxUploadSize:     maxUploadSize,
+		StabilitySeconds:  stabilitySeconds,
+		StabilityDuration: time.Duration(stabilitySeconds) * time.Second,
 	}
 }

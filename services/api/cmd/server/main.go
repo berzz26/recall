@@ -10,6 +10,7 @@ import (
 	"github.com/berzz26/recall/pkg/database"
 	"github.com/berzz26/recall/services/api/internal/config"
 	"github.com/berzz26/recall/services/api/internal/health"
+	local_source "github.com/berzz26/recall/services/api/internal/local_source"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/gofiber/fiber/v2"
@@ -42,7 +43,15 @@ func main() {
 	videoService := video.NewServiceWithConfig(videoRepo, store, cfg.MaxUploadSize)
 	videoHandler := video.NewHandler(videoService)
 
+	localSourceRepo := local_source.NewRepository(db.DB)
+	localSourceService := local_source.NewService(localSourceRepo, videoService, cfg.StabilityDuration)
+	localSourceHandler := local_source.NewHandler(localSourceService)
+
 	healthHandler := health.NewHandler(db.DB)
+
+	if err := localSourceService.StartAllWatchers(context.Background()); err != nil {
+		slog.Error("failed to start watchers", "error", err)
+	}
 
 	app := fiber.New(fiber.Config{
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
@@ -67,6 +76,7 @@ func main() {
 	v1 := api.Group("/v1")
 	v1.Mount("/videos", videoHandler.SetupRoutes())
 	v1.Post("/ingest/local", videoHandler.IngestLocal)
+	v1.Mount("/local-sources", localSourceHandler.SetupRoutes())
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -81,6 +91,8 @@ func main() {
 
 	<-sigCtx.Done()
 	slog.Info("shutdown signal received, shutting down")
+
+	localSourceService.StopAllWatchers()
 
 	if err := app.Shutdown(); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
