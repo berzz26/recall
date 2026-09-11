@@ -19,6 +19,8 @@ type Config struct {
 	StabilitySeconds   int
 	StabilityDuration  time.Duration
 	PollInterval       time.Duration
+	FFprobePath        string
+	FFprobeTimeout     time.Duration
 }
 
 func Load() Config {
@@ -66,6 +68,18 @@ func Load() Config {
 		}
 	}
 
+	ffprobePath := os.Getenv("FFPROBE_PATH")
+	if ffprobePath == "" {
+		ffprobePath = "ffprobe"
+	}
+
+	ffprobeTimeout := 60 * time.Second
+	if v := os.Getenv("FFPROBE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			ffprobeTimeout = d
+		}
+	}
+
 	return Config{
 		Env:               env,
 		Port:              port,
@@ -76,5 +90,7 @@ func Load() Config {
 		StabilitySeconds:  stabilitySeconds,
 		StabilityDuration: time.Duration(stabilitySeconds) * time.Second,
 		PollInterval:      pollInterval,
+		FFprobePath:       ffprobePath,
+		FFprobeTimeout:    ffprobeTimeout,
 	}
 }
