@@ -15,6 +15,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/processing"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
+	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
 	"github.com/gofiber/fiber/v2"
@@ -53,6 +54,9 @@ func main() {
 	videoSegmentRepo := video_segment.NewRepository(db.DB)
 	videoSegmentService := video_segment.NewService(videoSegmentRepo, cfg.SegmentDuration)
 
+	videoFrameRepo := video_frame.NewRepository(db.DB)
+	videoFrameService := video_frame.NewService(videoFrameRepo, store, cfg.FrameSampleInterval, cfg.FFmpegPath, cfg.FFmpegTimeout, cfg.FrameJPEGQuality)
+
 	localSourceRepo := local_source.NewRepository(db.DB)
 	localSourceService := local_source.NewService(localSourceRepo, videoService, cfg.StabilityDuration)
 	localSourceHandler := local_source.NewHandler(localSourceService)
@@ -69,7 +73,11 @@ func main() {
 		}
 	}
 
-	processor := processing.NewFFprobeProcessorWithSegments(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService)
+	if _, err := exec.LookPath(cfg.FFmpegPath); err != nil {
+		slog.Warn("ffmpeg not found, frame extraction will fail", "path", cfg.FFmpegPath, "error", err)
+	}
+
+	processor := processing.NewFFprobeProcessorWithFrames(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService)
 	worker := processing.NewWorker(videoService, processor, cfg.PollInterval)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	go worker.Start(workerCtx)

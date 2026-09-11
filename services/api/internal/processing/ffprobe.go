@@ -15,6 +15,7 @@ import (
 
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
+	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
 )
@@ -25,6 +26,7 @@ type FFprobeProcessor struct {
 	storage        storage.Storage
 	mediaService   *video_media.Service
 	segmentService *video_segment.Service
+	frameService   *video_frame.Service
 }
 
 func NewFFprobeProcessor(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service) *FFprobeProcessor {
@@ -45,6 +47,13 @@ func NewFFprobeProcessor(ffprobePath string, timeout time.Duration, store storag
 func NewFFprobeProcessorWithSegments(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service, segmentService *video_segment.Service) *FFprobeProcessor {
 	p := NewFFprobeProcessor(ffprobePath, timeout, store, mediaService)
 	p.segmentService = segmentService
+	return p
+}
+
+func NewFFprobeProcessorWithFrames(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service, segmentService *video_segment.Service, frameService *video_frame.Service) *FFprobeProcessor {
+	p := NewFFprobeProcessor(ffprobePath, timeout, store, mediaService)
+	p.segmentService = segmentService
+	p.frameService = frameService
 	return p
 }
 
@@ -269,12 +278,38 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 		return fmt.Errorf("failed to persist media metadata: %w", err)
 	}
 
+	var segments []video_segment.VideoSegment
 	if p.segmentService != nil {
 		if meta.DurationSeconds == nil || *meta.DurationSeconds <= 0 {
 			return fmt.Errorf("video duration unavailable; cannot generate segments")
 		}
-		if _, err := p.segmentService.GenerateForVideo(ctx, v.ID, *meta.DurationSeconds); err != nil {
+		var err error
+		segments, err = p.segmentService.GenerateForVideo(ctx, v.ID, *meta.DurationSeconds)
+		if err != nil {
 			return fmt.Errorf("failed to generate segments: %w", err)
+		}
+	} else if p.frameService != nil {
+		return fmt.Errorf("frame extraction requires segments")
+	}
+
+	if p.frameService != nil {
+		if meta.DurationSeconds == nil || *meta.DurationSeconds <= 0 {
+			return fmt.Errorf("video duration unavailable; cannot extract frames")
+		}
+		w := 0
+		h := 0
+		if meta.VideoWidth != nil {
+			w = *meta.VideoWidth
+		}
+		if meta.VideoHeight != nil {
+			h = *meta.VideoHeight
+		}
+		if w <= 0 || h <= 0 {
+			w = 1280
+			h = 720
+		}
+		if _, err := p.frameService.GenerateForVideo(ctx, v, segments, *meta.DurationSeconds, w, h); err != nil {
+			return fmt.Errorf("failed to extract frames: %w", err)
 		}
 	}
 
