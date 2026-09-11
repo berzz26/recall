@@ -59,7 +59,15 @@ func TestServiceCreateLocal(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
-	path := "/cctv/camera-01/video.mp4"
+	tmp, err := os.CreateTemp("", "localtest*.mp4")
+	if err != nil {
+		t.Fatalf("temp file: %v", err)
+	}
+	tmp.Write([]byte("local content"))
+	tmp.Close()
+	path := tmp.Name()
+	defer os.Remove(path)
+
 	v, err := svc.CreateVideo(ctx, "local.mp4", strPtr2("hash123"), strPtr2("video/mp4"), int64Ptr(123), sourcePtr(SourceTypeLocal), &path)
 	if err != nil {
 		t.Fatalf("CreateVideo LOCAL failed: %v", err)
@@ -70,8 +78,20 @@ func TestServiceCreateLocal(t *testing.T) {
 	if v.StorageKey != nil {
 		t.Fatalf("storage_key should be nil")
 	}
+	if v.ContentHash == "" {
+		t.Fatalf("content_hash should be populated")
+	}
+	if v.SizeBytes == 0 {
+		t.Fatalf("size_bytes should be populated")
+	}
+	if v.Status != StatusUploaded {
+		t.Fatalf("expected UPLOADED for LOCAL, got %s", v.Status)
+	}
 	if err := svc.DeleteVideo(ctx, v.ID); err != nil {
 		t.Fatalf("Delete failed: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("source file should not be deleted")
 	}
 }
 

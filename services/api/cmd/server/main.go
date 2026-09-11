@@ -39,7 +39,7 @@ func main() {
 	slog.Info("storage initialized", "root", store.Root())
 
 	videoRepo := video.NewRepository(db.DB)
-	videoService := video.NewServiceWithStorage(videoRepo, store)
+	videoService := video.NewServiceWithConfig(videoRepo, store, cfg.MaxUploadSize)
 	videoHandler := video.NewHandler(videoService)
 
 	healthHandler := health.NewHandler(db.DB)

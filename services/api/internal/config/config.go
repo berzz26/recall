@@ -1,17 +1,19 @@
 package config
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	Env         string
-	Port        string
-	Addr        string
-	DatabaseURL string
-	StorageRoot string
+	Env           string
+	Port          string
+	Addr          string
+	DatabaseURL   string
+	StorageRoot   string
+	MaxUploadSize int64
 }
 
 func Load() Config {
@@ -37,11 +39,20 @@ func Load() Config {
 		storageRoot = "./storage"
 	}
 
+	maxUploadSize := int64(1 << 30)
+	if v := os.Getenv("MAX_UPLOAD_SIZE"); v != "" {
+		var parsed int64
+		if _, err := fmt.Sscanf(v, "%d", &parsed); err == nil && parsed > 0 {
+			maxUploadSize = parsed
+		}
+	}
+
 	return Config{
-		Env:         env,
-		Port:        port,
-		Addr:        ":" + port,
-		DatabaseURL: dbURL,
-		StorageRoot: storageRoot,
+		Env:           env,
+		Port:          port,
+		Addr:          ":" + port,
+		DatabaseURL:   dbURL,
+		StorageRoot:   storageRoot,
+		MaxUploadSize: maxUploadSize,
 	}
 }

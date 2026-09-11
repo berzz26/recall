@@ -16,20 +16,32 @@ import (
 )
 
 type Service struct {
-	repo    *Repository
-	storage storage.Storage
+	repo          *Repository
+	storage       storage.Storage
+	maxUploadSize int64
 }
 
 func NewService(repo *Repository) *Service {
-	return &Service{repo: repo, storage: nil}
+	return &Service{repo: repo, storage: nil, maxUploadSize: 1 << 30}
 }
 
 func NewServiceWithStorage(repo *Repository, store storage.Storage) *Service {
-	return &Service{repo: repo, storage: store}
+	return &Service{repo: repo, storage: store, maxUploadSize: 1 << 30}
+}
+
+func NewServiceWithConfig(repo *Repository, store storage.Storage, maxUploadSize int64) *Service {
+	if maxUploadSize <= 0 {
+		maxUploadSize = 1 << 30
+	}
+	return &Service{repo: repo, storage: store, maxUploadSize: maxUploadSize}
 }
 
 func (s *Service) SetStorage(store storage.Storage) {
 	s.storage = store
+}
+
+func (s *Service) SetMaxUploadSize(size int64) {
+	s.maxUploadSize = size
 }
 
 var allowedExtensions = map[string]bool{
@@ -58,6 +70,20 @@ func mimeFromExtension(ext string) string {
 	}
 }
 
+func hashFile(path string) (string, int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
 func (s *Service) CreateVideo(ctx context.Context, filename string, contentHash *string, mimeType *string, sizeBytes *int64, sourceType *SourceType, sourcePath *string) (*Video, error) {
 	if filename == "" {
 		return nil, errors.New("filename is required")
@@ -83,8 +109,50 @@ func (s *Service) CreateVideo(ctx context.Context, filename string, contentHash 
 	if st == SourceTypeLocal {
 		ext := filepath.Ext(filename)
 		if !isAllowedExtension(ext) {
-			return nil, fmt.Errorf("unsupported file type %s", ext)
+			ext2 := filepath.Ext(*sourcePath)
+			if !isAllowedExtension(ext2) {
+				return nil, fmt.Errorf("unsupported file type %s", ext)
+			}
 		}
+
+		absPath, err := filepath.Abs(*sourcePath)
+		if err != nil {
+			return nil, fmt.Errorf("invalid source_path")
+		}
+		info, err := os.Stat(absPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("source_path does not exist: %w", err)
+			}
+			return nil, fmt.Errorf("cannot access source_path: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, errors.New("source_path is not a regular file")
+		}
+		if info.Size() == 0 {
+			return nil, errors.New("file is empty")
+		}
+		f, err := os.Open(absPath)
+		if err != nil {
+			return nil, fmt.Errorf("cannot open source_path: %w", err)
+		}
+		f.Close()
+
+		hash, size, err := hashFile(absPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to hash file: %w", err)
+		}
+		mime := mimeFromExtension(filepath.Ext(absPath))
+		if mime == "application/octet-stream" {
+			mime = mimeFromExtension(filepath.Ext(filename))
+		}
+		mtime := info.ModTime()
+		absCopy := absPath
+		v, err := s.repo.CreateWithMtime(ctx, filename, hash, mime, size, st, &absCopy, &mtime, StatusUploaded)
+		if err != nil {
+			return nil, fmt.Errorf("create video: %w", err)
+		}
+		return v, nil
 	}
 
 	ch := ""
@@ -131,9 +199,9 @@ func (s *Service) UploadVideo(ctx context.Context, filename string, reader io.Re
 		return nil, errors.New("storage not configured")
 	}
 
-	if mimeType == "" {
-		mimeType = mimeFromExtension(ext)
-	}
+	mimeType = mimeFromExtension(ext)
+
+	limitReader := io.LimitReader(reader, s.maxUploadSize+1)
 
 	v, err := s.repo.Create(ctx, filename, "", mimeType, 0, SourceTypeUpload, nil)
 	if err != nil {
@@ -144,7 +212,7 @@ func (s *Service) UploadVideo(ctx context.Context, filename string, reader io.Re
 
 	pr, pw := io.Pipe()
 	hash := sha256.New()
-	tee := io.TeeReader(reader, hash)
+	tee := io.TeeReader(limitReader, hash)
 	var written int64
 	var copyErr error
 	done := make(chan struct{})
@@ -165,6 +233,17 @@ func (s *Service) UploadVideo(ctx context.Context, filename string, reader io.Re
 		s.storage.Delete(ctx, storageKey)
 		s.repo.UpdateStatus(ctx, v.ID, StatusFailed)
 		return nil, fmt.Errorf("save file: %w", err)
+	}
+
+	if written == 0 {
+		s.storage.Delete(ctx, storageKey)
+		s.repo.UpdateStatus(ctx, v.ID, StatusFailed)
+		return nil, errors.New("empty file")
+	}
+	if written > s.maxUploadSize {
+		s.storage.Delete(ctx, storageKey)
+		s.repo.UpdateStatus(ctx, v.ID, StatusFailed)
+		return nil, fmt.Errorf("file too large: %d bytes exceeds limit %d", written, s.maxUploadSize)
 	}
 
 	hashStr := hex.EncodeToString(hash.Sum(nil))
@@ -210,6 +289,13 @@ func (s *Service) ListVideos(ctx context.Context, limit, offset int) ([]Video, e
 		videos = []Video{}
 	}
 	return videos, nil
+}
+
+func (s *Service) GetByContentHash(ctx context.Context, hash string) ([]Video, error) {
+	if hash == "" {
+		return nil, errors.New("hash is required")
+	}
+	return s.repo.GetByContentHash(ctx, hash)
 }
 
 func (s *Service) DeleteVideo(ctx context.Context, id uuid.UUID) error {
@@ -282,13 +368,24 @@ func (s *Service) IngestLocalDirectory(ctx context.Context, dir string) (int, er
 		if exists {
 			return nil
 		}
-		filename := filepath.Base(path)
-		var size int64
-		if fi, err := d.Info(); err == nil {
-			size = fi.Size()
+		info, err := d.Info()
+		if err != nil {
+			return nil
 		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		if info.Size() == 0 {
+			return nil
+		}
+		hash, _, err := hashFile(path)
+		if err != nil {
+			return nil
+		}
+		filename := filepath.Base(path)
 		mime := mimeFromExtension(ext)
-		_, err = s.repo.Create(ctx, filename, "", mime, size, SourceTypeLocal, &path)
+		mtime := info.ModTime()
+		_, err = s.repo.CreateWithMtime(ctx, filename, hash, mime, info.Size(), SourceTypeLocal, &path, &mtime, StatusUploaded)
 		if err != nil {
 			return nil
 		}

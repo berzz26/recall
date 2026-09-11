@@ -64,6 +64,12 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 
 	v, err := h.service.CreateVideo(ctx, req.Filename, req.ContentHash, req.MimeType, req.SizeBytes, req.SourceType, req.SourcePath)
 	if err != nil {
+		if strings.Contains(err.Error(), "does not exist") {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
+		}
+		if strings.Contains(err.Error(), "not a regular file") || strings.Contains(err.Error(), "unsupported file type") || strings.Contains(err.Error(), "source_path is required") {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 	return c.Status(fiber.StatusCreated).JSON(v)

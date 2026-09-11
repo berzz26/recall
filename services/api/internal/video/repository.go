@@ -3,6 +3,7 @@ package video
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,7 +17,7 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
-const videoFields = `id, filename, content_hash, mime_type, size_bytes, source_type, source_path, storage_key, status, created_at, updated_at`
+const videoFields = `id, filename, content_hash, mime_type, size_bytes, source_type, source_path, storage_key, source_mtime, status, created_at, updated_at`
 
 func scanVideo(row interface{ Scan(dest ...any) error }) (*Video, error) {
 	var v Video
@@ -29,6 +30,7 @@ func scanVideo(row interface{ Scan(dest ...any) error }) (*Video, error) {
 		&v.SourceType,
 		&v.SourcePath,
 		&v.StorageKey,
+		&v.SourceMtime,
 		&v.Status,
 		&v.CreatedAt,
 		&v.UpdatedAt,
@@ -47,6 +49,17 @@ func (r *Repository) Create(ctx context.Context, filename, contentHash, mimeType
 	`, videoFields)
 
 	row := r.db.QueryRow(ctx, query, filename, contentHash, mimeType, sizeBytes, sourceType, sourcePath, StatusUploading)
+	return scanVideo(row)
+}
+
+func (r *Repository) CreateWithMtime(ctx context.Context, filename, contentHash, mimeType string, sizeBytes int64, sourceType SourceType, sourcePath *string, sourceMtime *time.Time, status Status) (*Video, error) {
+	query := fmt.Sprintf(`
+		INSERT INTO videos (filename, content_hash, mime_type, size_bytes, source_type, source_path, source_mtime, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING %s
+	`, videoFields)
+
+	row := r.db.QueryRow(ctx, query, filename, contentHash, mimeType, sizeBytes, sourceType, sourcePath, sourceMtime, status)
 	return scanVideo(row)
 }
 
@@ -123,6 +136,27 @@ func (r *Repository) ExistsBySourcePath(ctx context.Context, sourcePath string) 
 	var exists bool
 	err := r.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM videos WHERE source_path = $1 AND source_type = $2)`, sourcePath, SourceTypeLocal).Scan(&exists)
 	return exists, err
+}
+
+func (r *Repository) GetByContentHash(ctx context.Context, hash string) ([]Video, error) {
+	query := fmt.Sprintf(`SELECT %s FROM videos WHERE content_hash = $1 ORDER BY created_at DESC`, videoFields)
+	rows, err := r.db.Query(ctx, query, hash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []Video
+	for rows.Next() {
+		v, err := scanVideo(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, *v)
+	}
+	if list == nil {
+		list = []Video{}
+	}
+	return list, nil
 }
 
 func (r *Repository) Count(ctx context.Context) (int64, error) {

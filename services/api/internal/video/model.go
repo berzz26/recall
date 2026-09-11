@@ -32,6 +32,7 @@ type Video struct {
 	SourceType  SourceType `json:"source_type"`
 	SourcePath  *string    `json:"source_path"`
 	StorageKey  *string    `json:"storage_key"`
+	SourceMtime *time.Time `json:"source_mtime"`
 	Status      Status     `json:"status"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
