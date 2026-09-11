@@ -16,7 +16,7 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
-const videoFields = `id, filename, content_hash, mime_type, size_bytes, status, created_at, updated_at`
+const videoFields = `id, filename, content_hash, mime_type, size_bytes, source_type, source_path, storage_key, status, created_at, updated_at`
 
 func scanVideo(row interface{ Scan(dest ...any) error }) (*Video, error) {
 	var v Video
@@ -26,6 +26,9 @@ func scanVideo(row interface{ Scan(dest ...any) error }) (*Video, error) {
 		&v.ContentHash,
 		&v.MimeType,
 		&v.SizeBytes,
+		&v.SourceType,
+		&v.SourcePath,
+		&v.StorageKey,
 		&v.Status,
 		&v.CreatedAt,
 		&v.UpdatedAt,
@@ -36,14 +39,14 @@ func scanVideo(row interface{ Scan(dest ...any) error }) (*Video, error) {
 	return &v, nil
 }
 
-func (r *Repository) Create(ctx context.Context, filename, contentHash, mimeType string, sizeBytes int64) (*Video, error) {
+func (r *Repository) Create(ctx context.Context, filename, contentHash, mimeType string, sizeBytes int64, sourceType SourceType, sourcePath *string) (*Video, error) {
 	query := fmt.Sprintf(`
-		INSERT INTO videos (filename, content_hash, mime_type, size_bytes, status)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO videos (filename, content_hash, mime_type, size_bytes, source_type, source_path, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING %s
 	`, videoFields)
 
-	row := r.db.QueryRow(ctx, query, filename, contentHash, mimeType, sizeBytes, StatusUploading)
+	row := r.db.QueryRow(ctx, query, filename, contentHash, mimeType, sizeBytes, sourceType, sourcePath, StatusUploading)
 	return scanVideo(row)
 }
 

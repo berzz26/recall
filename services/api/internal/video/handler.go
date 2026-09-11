@@ -21,16 +21,22 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
 	}
-	if req.Filename == "" || req.ContentHash == "" || req.MimeType == "" || req.SizeBytes <= 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "filename, content_hash, mime_type and size_bytes are required"})
+	if req.Filename == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "filename is required"})
+	}
+	if req.SourceType != nil && *req.SourceType != SourceTypeLocal && *req.SourceType != SourceTypeUpload {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid source_type"})
+	}
+	if req.SourceType != nil && *req.SourceType == SourceTypeLocal && (req.SourcePath == nil || *req.SourcePath == "") {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "source_path is required for LOCAL source_type"})
 	}
 
 	ctx, cancel := context.WithTimeout(c.UserContext(), 5*time.Second)
 	defer cancel()
 
-	v, err := h.service.CreateVideo(ctx, req.Filename, req.ContentHash, req.MimeType, req.SizeBytes)
+	v, err := h.service.CreateVideo(ctx, req.Filename, req.ContentHash, req.MimeType, req.SizeBytes, req.SourceType, req.SourcePath)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to create video"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 	return c.Status(fiber.StatusCreated).JSON(v)
 }
