@@ -1,6 +1,6 @@
-# Recall
+# ReCall
 
-Recall is a video intelligence platform for turning raw video footage into searchable events.
+ReCall is a video intelligence platform for turning raw video footage into searchable events.
 
 The idea is simple. Video contains a lot of information, but finding one specific event in hours of footage is difficult. Recall processes video, extracts useful information from it, stores that information, and makes it possible to search through the footage later.
 
