@@ -109,3 +109,18 @@ export interface TrackDetection {
   timestamp_seconds: number
   created_at: string
 }
+
+export interface Event {
+  id: string
+  video_id: string
+  track_id: string | null
+  segment_id: string | null
+  event_type: string
+  label: string
+  start_timestamp: number
+  end_timestamp: number | null
+  confidence: number | null
+  metadata: any
+  created_at: string
+  updated_at: string
+}

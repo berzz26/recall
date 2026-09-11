@@ -15,6 +15,7 @@ import (
 
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
+	"github.com/berzz26/recall/services/api/internal/video_event"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
@@ -31,6 +32,7 @@ type FFprobeProcessor struct {
 	frameService   *video_frame.Service
 	visualService  *visual.Service
 	trackService   *video_track.Service
+	eventService   *video_event.Service
 }
 
 func NewFFprobeProcessor(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service) *FFprobeProcessor {
@@ -75,6 +77,16 @@ func NewFFprobeProcessorWithTracking(ffprobePath string, timeout time.Duration, 
 	p.frameService = frameService
 	p.visualService = visualService
 	p.trackService = trackService
+	return p
+}
+
+func NewFFprobeProcessorWithEvents(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service, segmentService *video_segment.Service, frameService *video_frame.Service, visualService *visual.Service, trackService *video_track.Service, eventService *video_event.Service) *FFprobeProcessor {
+	p := NewFFprobeProcessor(ffprobePath, timeout, store, mediaService)
+	p.segmentService = segmentService
+	p.frameService = frameService
+	p.visualService = visualService
+	p.trackService = trackService
+	p.eventService = eventService
 	return p
 }
 
@@ -343,6 +355,12 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 	if p.trackService != nil {
 		if _, err := p.trackService.GenerateForVideoID(ctx, v.ID); err != nil {
 			return fmt.Errorf("failed to generate tracks: %w", err)
+		}
+	}
+
+	if p.eventService != nil {
+		if _, err := p.eventService.GenerateForVideo(ctx, v.ID); err != nil {
+			return fmt.Errorf("failed to generate events: %w", err)
 		}
 	}
 

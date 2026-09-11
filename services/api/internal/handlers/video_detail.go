@@ -10,6 +10,7 @@ import (
 
 	"github.com/berzz26/recall/services/api/internal/detection"
 	"github.com/berzz26/recall/services/api/internal/storage"
+	"github.com/berzz26/recall/services/api/internal/video_event"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
@@ -22,6 +23,7 @@ type VideoDetailHandler struct {
 	frameRepo     *video_frame.Repository
 	detectionRepo *detection.Repository
 	trackRepo     *video_track.Repository
+	eventRepo     *video_event.Repository
 	storage       storage.Storage
 }
 
@@ -31,6 +33,10 @@ func NewVideoDetailHandler(mr *video_media.Repository, sr *video_segment.Reposit
 
 func NewVideoDetailHandlerWithTracks(mr *video_media.Repository, sr *video_segment.Repository, fr *video_frame.Repository, dr *detection.Repository, tr *video_track.Repository, st storage.Storage) *VideoDetailHandler {
 	return &VideoDetailHandler{mediaRepo: mr, segmentRepo: sr, frameRepo: fr, detectionRepo: dr, trackRepo: tr, storage: st}
+}
+
+func NewVideoDetailHandlerWithEvents(mr *video_media.Repository, sr *video_segment.Repository, fr *video_frame.Repository, dr *detection.Repository, tr *video_track.Repository, er *video_event.Repository, st storage.Storage) *VideoDetailHandler {
+	return &VideoDetailHandler{mediaRepo: mr, segmentRepo: sr, frameRepo: fr, detectionRepo: dr, trackRepo: tr, eventRepo: er, storage: st}
 }
 
 func (h *VideoDetailHandler) GetMedia(c *fiber.Ctx) error {
@@ -164,4 +170,49 @@ func (h *VideoDetailHandler) GetTrackDetections(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "failed"})
 	}
 	return c.JSON(dets)
+}
+
+func (h *VideoDetailHandler) GetEvents(c *fiber.Ctx) error {
+	if h.eventRepo == nil {
+		return c.Status(500).JSON(fiber.Map{"error": "events not configured"})
+	}
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid id"})
+	}
+	eventType := c.Query("event_type")
+	label := c.Query("label")
+	trackIDStr := c.Query("track_id")
+	var trackID *uuid.UUID
+	if trackIDStr != "" {
+		tid, err := uuid.Parse(trackIDStr)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid track_id"})
+		}
+		trackID = &tid
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 5*time.Second)
+	defer cancel()
+	events, err := h.eventRepo.GetByVideoID(ctx, id, eventType, label, trackID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "failed"})
+	}
+	return c.JSON(events)
+}
+
+func (h *VideoDetailHandler) GetTrackEvents(c *fiber.Ctx) error {
+	if h.eventRepo == nil {
+		return c.Status(500).JSON(fiber.Map{"error": "events not configured"})
+	}
+	tid, err := uuid.Parse(c.Params("trackId"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid trackId"})
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 5*time.Second)
+	defer cancel()
+	events, err := h.eventRepo.GetByTrackID(ctx, tid)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "failed"})
+	}
+	return c.JSON(events)
 }

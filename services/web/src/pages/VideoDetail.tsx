@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { client } from '../api/client'
-import type { Video, MediaMetadata, Segment, Frame, Detection, Track } from '../api/types'
+import type { Video, MediaMetadata, Segment, Frame, Detection, Track, Event } from '../api/types'
 import { StatusBadge } from '../components/StatusBadge'
 import { Loading, ErrorState } from '../components/Loading'
 
@@ -15,6 +15,8 @@ export default function VideoDetail() {
   const [tracks, setTracks] = useState<Track[]>([])
   const [detToTrack, setDetToTrack] = useState<Record<string, number>>({})
   const [selectedTrack, setSelectedTrack] = useState<number | 'all'>('all')
+  const [events, setEvents] = useState<Event[]>([])
+  const [eventFilter, setEventFilter] = useState<string>('all')
   const [err, setErr] = useState<string | null>(null)
   const [selectedFrame, setSelectedFrame] = useState<Frame | null>(null)
 
@@ -30,7 +32,6 @@ export default function VideoDetail() {
       try {
         const t = await client.get<Track[]>(`/api/v1/videos/${id}/tracks`)
         setTracks(t)
-        // build detection -> track map
         const map: Record<string, number> = {}
         await Promise.all(t.map(async (tr) => {
           try {
@@ -40,6 +41,7 @@ export default function VideoDetail() {
         }))
         setDetToTrack(map)
       } catch { setTracks([]); setDetToTrack({}) }
+      try { setEvents(await client.get<Event[]>(`/api/v1/videos/${id}/events`)) } catch { setEvents([]) }
       setErr(null)
     } catch (e: any) { setErr(e.message) }
   }
@@ -169,6 +171,70 @@ export default function VideoDetail() {
             )}
           </>
         )}
+      </div>
+
+      <div className="card">
+        <h3>Events ({events.length})</h3>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          <select value={eventFilter} onChange={e => setEventFilter(e.target.value)} style={{ padding: '6px 8px' }}>
+            <option value="all">All events</option>
+            <option value="OBJECT_APPEARED">Appeared</option>
+            <option value="OBJECT_PRESENT">Present</option>
+            <option value="OBJECT_DISAPPEARED">Last observed</option>
+            <option value="OBJECT_MOVED">Movement</option>
+          </select>
+          {selectedTrack !== 'all' && <span style={{ fontSize: 12, color: '#9aa0b0', alignSelf: 'center' }}>Filtered to Track {selectedTrack} + event filter</span>}
+        </div>
+        {media?.duration_seconds && tracks.length > 0 && (
+          <div style={{ marginBottom: 12, padding: 8, background: '#0f1115', borderRadius: 6, border: '1px solid #2a2e39' }}>
+            <div style={{ fontSize: 11, color: '#9aa0b0', marginBottom: 4 }}>Timeline — Present (blue) & Movement (green)</div>
+            {tracks.filter(t => selectedTrack === 'all' || t.track_index === selectedTrack).map(t => {
+              const dur = media.duration_seconds || 1
+              const presentEvents = events.filter(e => e.track_id === t.id && e.event_type === 'OBJECT_PRESENT')
+              const movedEvents = events.filter(e => e.track_id === t.id && e.event_type === 'OBJECT_MOVED')
+              return (
+                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span style={{ width: 90, fontSize: 11, fontWeight: 600 }}>T{t.track_index} {t.label}</span>
+                  <div style={{ flex: 1, height: 18, background: '#1a1d23', borderRadius: 3, position: 'relative', overflow: 'hidden' }}>
+                    {presentEvents.map(e => {
+                      const s = (e.start_timestamp / dur) * 100
+                      const ee = ((e.end_timestamp ?? e.start_timestamp) / dur) * 100
+                      return <div key={e.id} style={{ position: 'absolute', left: `${s}%`, width: `${Math.max(1, ee - s)}%`, top: 0, bottom: 0, background: '#3b82f6', opacity: 0.7 }} title={`${e.start_timestamp.toFixed(1)}→${(e.end_timestamp ?? e.start_timestamp).toFixed(1)}`} />
+                    })}
+                    {movedEvents.map(e => {
+                      const s = (e.start_timestamp / dur) * 100
+                      const ee = ((e.end_timestamp ?? e.start_timestamp) / dur) * 100
+                      return <div key={e.id} style={{ position: 'absolute', left: `${s}%`, width: `${Math.max(1, ee - s)}%`, top: 4, bottom: 4, background: '#22c55e', opacity: 0.9, borderRadius: 2 }} title={`moved ${e.start_timestamp.toFixed(1)}→${(e.end_timestamp ?? e.start_timestamp).toFixed(1)}`} />
+                    })}
+                  </div>
+                  <span style={{ fontSize: 10, color: '#9aa0b0', minWidth: 90 }}>{t.start_timestamp.toFixed(1)}s → {t.end_timestamp.toFixed(1)}s</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        <table className="table">
+          <thead><tr><th>Time</th><th>Type</th><th>Label</th><th>Track</th><th>Confidence</th></tr></thead>
+          <tbody>
+            {events
+              .filter(e => eventFilter === 'all' || e.event_type === eventFilter)
+              .filter(e => {
+                if (selectedTrack === 'all') return true
+                const tr = tracks.find(t => t.id === e.track_id)
+                return tr?.track_index === selectedTrack
+              })
+              .map(e => (
+                <tr key={e.id} style={e.event_type === 'OBJECT_MOVED' ? { background: 'rgba(34,197,94,0.08)' } : undefined}>
+                  <td>{e.end_timestamp ? `${e.start_timestamp.toFixed(2)} → ${e.end_timestamp.toFixed(2)}` : e.start_timestamp.toFixed(2)}</td>
+                  <td>{e.event_type === 'OBJECT_APPEARED' ? 'Appeared' : e.event_type === 'OBJECT_DISAPPEARED' ? 'Last observed' : e.event_type === 'OBJECT_PRESENT' ? 'Present' : e.event_type === 'OBJECT_MOVED' ? 'Movement' : e.event_type}</td>
+                  <td>{e.label}</td>
+                  <td>{(() => { const tr = tracks.find(t => t.id === e.track_id); return tr ? `Track ${tr.track_index}` : '-' })()}</td>
+                  <td>{e.confidence != null ? `${(e.confidence * 100).toFixed(0)}%` : '-'}</td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+        {events.length === 0 && <div className="empty">No events</div>}
       </div>
 
       <div className="card">

@@ -31,6 +31,7 @@ type Config struct {
 	DetectorVersion     string
 	ModelPath           string
 	PythonPath          string
+	EventMovementThreshold float64
 }
 
 func Load() Config {
@@ -164,6 +165,18 @@ func Load() Config {
 		pythonPath = "python3"
 	}
 
+	movementThreshold := 0.05
+	if v := os.Getenv("EVENT_MOVEMENT_THRESHOLD"); v != "" {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+			if parsed <= 0 || parsed > 1 {
+				panic(fmt.Sprintf("EVENT_MOVEMENT_THRESHOLD must be 0..1, got %s", v))
+			}
+			movementThreshold = parsed
+		} else {
+			panic(fmt.Sprintf("invalid EVENT_MOVEMENT_THRESHOLD %q: %v", v, err))
+		}
+	}
+
 	return Config{
 		Env:               env,
 		Port:              port,
@@ -186,5 +199,6 @@ func Load() Config {
 		DetectorVersion:     detectorVersion,
 		ModelPath:           modelPath,
 		PythonPath:          pythonPath,
+		EventMovementThreshold: movementThreshold,
 	}
 }
