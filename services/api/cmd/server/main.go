@@ -96,8 +96,26 @@ func main() {
 	eventService := video_event.NewServiceWithThreshold(eventRepo, trackRepo, videoSegmentRepo, detectionRepo, cfg.EventMovementThreshold)
 
 	segmentDescRepo := segment_description.NewRepository(db.DB)
-	describer := vision.NewDeterministicDescriber(cfg.VisionModel, cfg.VisionModelVersion, cfg.VisionMaxFrames)
-	segmentDescService := segment_description.NewService(segmentDescRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, describer, cfg.VisionMaxFrames)
+	visionScriptPath := filepath.Join("workers", "vision", "describe.py")
+	if _, err := os.Stat(visionScriptPath); err != nil {
+		if abs, err2 := filepath.Abs(visionScriptPath); err2 == nil {
+			if _, err3 := os.Stat(abs); err3 == nil {
+				visionScriptPath = abs
+			}
+		}
+		if _, err := os.Stat(visionScriptPath); err != nil {
+			alt := "/home/berzz/recall/workers/vision/describe.py"
+			if _, err2 := os.Stat(alt); err2 == nil {
+				visionScriptPath = alt
+			}
+		}
+	} else {
+		if abs, err := filepath.Abs(visionScriptPath); err == nil {
+			visionScriptPath = abs
+		}
+	}
+	describer := vision.NewQwenDescriber(cfg.VisionPythonPath, visionScriptPath, cfg.VisionModel, cfg.VisionModelVersion, cfg.VisionMaxFrames, store, cfg.VisionTimeout)
+	segmentDescService := segment_description.NewService(segmentDescRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, describer, cfg.VisionModel, cfg.VisionModelVersion)
 
 	localSourceRepo := local_source.NewRepository(db.DB)
 	localSourceService := local_source.NewService(localSourceRepo, videoService, cfg.StabilityDuration)

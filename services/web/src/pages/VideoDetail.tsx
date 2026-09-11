@@ -252,16 +252,20 @@ export default function VideoDetail() {
               })
               .map(d => {
                 const seg = segments.find(s => s.id === d.segment_id)
-                const timeLabel = seg ? `${seg.start_time.toFixed(0)}s → ${seg.end_time.toFixed(0)}s` : d.segment_id.slice(0, 8)
+                const fmtTime = (s: number) => {
+                  const m = Math.floor(s / 60)
+                  const ss = Math.floor(s % 60)
+                  return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
+                }
+                const timeLabel = seg ? `${fmtTime(seg.start_time)} → ${fmtTime(seg.end_time)}` : d.segment_id.slice(0, 8)
                 return (
                   <div key={d.id} style={{ padding: 12, background: '#0f1115', border: '1px solid #2a2e39', borderRadius: 6, cursor: seg ? 'pointer' : 'default' }} onClick={() => {
                     if (!seg) return
                     const el = document.getElementById(`seg-${seg.id}`)
                     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                    // also highlight frames by briefly setting selectedTrack to relevant? keep simple
                   }}>
                     <div style={{ fontSize: 11, color: '#9aa0b0', marginBottom: 4 }}>{timeLabel} — Segment {seg?.segment_index ?? '?'}</div>
-                    <div style={{ fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>"{d.description}"</div>
+                    <div style={{ fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{d.description}</div>
                     <div style={{ fontSize: 11, color: '#9aa0b0', marginTop: 6 }}>Model: {d.model_name} v{d.model_version}</div>
                   </div>
                 )

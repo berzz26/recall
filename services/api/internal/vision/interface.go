@@ -6,51 +6,54 @@ import (
 	"github.com/google/uuid"
 )
 
-type SegmentDescriptionInput struct {
-	VideoID      uuid.UUID
-	SegmentID    uuid.UUID
-	StartTime    float64
-	EndTime      float64
-	Frames       []FrameRef
-	Detections   []DetectionRef
-	Tracks       []TrackRef
-	Events       []EventRef
+type FrameInput struct {
+	ID          uuid.UUID
+	Timestamp   float64
+	StorageKey  string
 }
 
-type FrameRef struct {
-	ID        uuid.UUID
+type DetectionInput struct {
+	Label     string
+	FrameID   uuid.UUID
 	Timestamp float64
-	Width     int
-	Height    int
 }
 
-type DetectionRef struct {
+type TrackInput struct {
 	Label      string
-	Confidence float64
-	Count      int
+	TrackIndex int
+	Start      float64
+	End        float64
 }
 
-type TrackRef struct {
-	Label          string
-	TrackIndex     int
-	StartTimestamp float64
-	EndTimestamp   float64
-	DetectionCount int
-}
-
-type EventRef struct {
+type EventInput struct {
 	EventType string
 	Label     string
 	Start     float64
 	End       *float64
 }
 
+type SegmentInput struct {
+	SegmentID  uuid.UUID
+	StartTime  float64
+	EndTime    float64
+	Frames     []FrameInput
+	Detections []DetectionInput
+	Tracks     []TrackInput
+	Events     []EventInput
+}
+
+type VideoDescriptionInput struct {
+	VideoID  uuid.UUID
+	Segments []SegmentInput
+}
+
 type DescriptionResult struct {
+	SegmentID    uuid.UUID
 	Description  string
 	ModelName    string
 	ModelVersion string
 }
 
 type VisionDescriber interface {
-	DescribeSegment(ctx context.Context, input SegmentDescriptionInput) (DescriptionResult, error)
+	DescribeVideo(ctx context.Context, input VideoDescriptionInput) ([]DescriptionResult, error)
 }

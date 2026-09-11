@@ -3,7 +3,7 @@ package segment_description
 import (
 	"context"
 	"fmt"
-	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/berzz26/recall/services/api/internal/detection"
@@ -15,58 +15,25 @@ import (
 )
 
 type Service struct {
-	repo          *Repository
-	segmentRepo   *video_segment.Repository
-	frameRepo     *video_frame.Repository
-	detectionRepo *detection.Repository
-	trackRepo     *video_track.Repository
-	eventRepo     *video_event.Repository
-	describer     vision.VisionDescriber
-	maxFrames     int
+	repo             *Repository
+	segmentRepo      *video_segment.Repository
+	frameRepo        *video_frame.Repository
+	detectionRepo    *detection.Repository
+	trackRepo        *video_track.Repository
+	eventRepo        *video_event.Repository
+	describer        vision.VisionDescriber
+	expectedModelName    string
+	expectedModelVersion string
 }
 
-func NewService(repo *Repository, segRepo *video_segment.Repository, frameRepo *video_frame.Repository, detRepo *detection.Repository, trackRepo *video_track.Repository, eventRepo *video_event.Repository, describer vision.VisionDescriber, maxFrames int) *Service {
-	if maxFrames <= 0 {
-		maxFrames = 6
-	}
-	if describer == nil {
-		describer = vision.NewDeterministicDescriber("deterministic-local", "1", maxFrames)
-	}
-	return &Service{repo: repo, segmentRepo: segRepo, frameRepo: frameRepo, detectionRepo: detRepo, trackRepo: trackRepo, eventRepo: eventRepo, describer: describer, maxFrames: maxFrames}
-}
-
-func selectFrames(frames []video_frame.VideoFrame, seg video_segment.VideoSegment, max int) []video_frame.VideoFrame {
-	var inSeg []video_frame.VideoFrame
-	for _, f := range frames {
-		if f.TimestampSeconds >= seg.StartTime && f.TimestampSeconds < seg.EndTime {
-			inSeg = append(inSeg, f)
-		}
-	}
-	if len(inSeg) == 0 {
-		return nil
-	}
-	sort.Slice(inSeg, func(i, j int) bool { return inSeg[i].TimestampSeconds < inSeg[j].TimestampSeconds })
-	if len(inSeg) <= max {
-		return inSeg
-	}
-	// evenly distributed
-	var out []video_frame.VideoFrame
-	step := float64(len(inSeg)) / float64(max)
-	for i := 0; i < max; i++ {
-		idx := int(float64(i) * step)
-		if idx >= len(inSeg) {
-			idx = len(inSeg) - 1
-		}
-		out = append(out, inSeg[idx])
-	}
-	// ensure last frame is included
-	if out[len(out)-1].ID != inSeg[len(inSeg)-1].ID {
-		out[len(out)-1] = inSeg[len(inSeg)-1]
-	}
-	return out
+func NewService(repo *Repository, segRepo *video_segment.Repository, frameRepo *video_frame.Repository, detRepo *detection.Repository, trackRepo *video_track.Repository, eventRepo *video_event.Repository, describer vision.VisionDescriber, modelName, modelVersion string) *Service {
+	return &Service{repo: repo, segmentRepo: segRepo, frameRepo: frameRepo, detectionRepo: detRepo, trackRepo: trackRepo, eventRepo: eventRepo, describer: describer, expectedModelName: modelName, expectedModelVersion: modelVersion}
 }
 
 func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID) ([]Description, error) {
+	if s.describer == nil {
+		return nil, fmt.Errorf("vision describer not configured")
+	}
 	segments, err := s.segmentRepo.GetByVideoID(ctx, videoID)
 	if err != nil {
 		return nil, err
@@ -91,89 +58,106 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID) ([]De
 		return nil, err
 	}
 
-	// Build maps for quick lookup
-	// Detections per label count for whole video, but we need per segment
-	// For each segment, filter
-	var descs []Description
+	frameByID := map[uuid.UUID]video_frame.VideoFrame{}
+	for _, f := range frames {
+		frameByID[f.ID] = f
+	}
+
+	var segInputs []vision.SegmentInput
 	for _, seg := range segments {
-		selFrames := selectFrames(frames, seg, s.maxFrames)
-		// Build frame refs
-		var frameRefs []vision.FrameRef
-		for _, f := range selFrames {
-			frameRefs = append(frameRefs, vision.FrameRef{ID: f.ID, Timestamp: f.TimestampSeconds, Width: f.Width, Height: f.Height})
-		}
-		// Detections in segment: those whose frame is in segment OR whose timestamp in segment
-		var segDets []detection.Detection
-		for _, d := range dets {
-			// find frame timestamp
-			for _, f := range frames {
-				if f.ID == d.FrameID && f.TimestampSeconds >= seg.StartTime && f.TimestampSeconds < seg.EndTime {
-					segDets = append(segDets, d)
-					break
-				}
+		var segFrames []vision.FrameInput
+		for _, f := range frames {
+			if f.SegmentID == seg.ID || (f.TimestampSeconds >= seg.StartTime && f.TimestampSeconds < seg.EndTime) {
+				segFrames = append(segFrames, vision.FrameInput{ID: f.ID, Timestamp: f.TimestampSeconds, StorageKey: f.StorageKey})
 			}
 		}
-		// Aggregate detections by label
-		countByLabel := make(map[string]int)
-		for _, d := range segDets {
-			countByLabel[d.Label]++
+		if len(segFrames) == 0 {
+			return nil, fmt.Errorf("segment %d has no frames; cannot describe without visual evidence", seg.SegmentIndex)
 		}
-		var detRefs []vision.DetectionRef
-		for label, cnt := range countByLabel {
-			detRefs = append(detRefs, vision.DetectionRef{Label: label, Count: cnt})
+		var segDets []vision.DetectionInput
+		for _, d := range dets {
+			f, ok := frameByID[d.FrameID]
+			if !ok {
+				continue
+			}
+			if f.TimestampSeconds >= seg.StartTime && f.TimestampSeconds < seg.EndTime {
+				segDets = append(segDets, vision.DetectionInput{Label: d.Label, FrameID: d.FrameID, Timestamp: f.TimestampSeconds})
+			}
 		}
-		// Tracks in segment: tracks whose interval overlaps segment
-		var segTracks []vision.TrackRef
+		var segTracks []vision.TrackInput
 		for _, tr := range tracksWithCounts {
-			// check overlap
 			if tr.EndTimestamp < seg.StartTime || tr.StartTimestamp >= seg.EndTime {
 				continue
 			}
-			segTracks = append(segTracks, vision.TrackRef{Label: tr.Label, TrackIndex: tr.TrackIndex, StartTimestamp: tr.StartTimestamp, EndTimestamp: tr.EndTimestamp, DetectionCount: tr.DetectionCount})
+			segTracks = append(segTracks, vision.TrackInput{Label: tr.Label, TrackIndex: tr.TrackIndex, Start: tr.StartTimestamp, End: tr.EndTimestamp})
 		}
-		// Events in segment
-		var segEvents []vision.EventRef
+		var segEvents []vision.EventInput
 		for _, e := range events {
-			if e.StartTimestamp >= seg.StartTime && e.StartTimestamp < seg.EndTime {
-				segEvents = append(segEvents, vision.EventRef{EventType: e.EventType, Label: e.Label, Start: e.StartTimestamp, End: e.EndTimestamp})
-			} else if e.EndTimestamp != nil && *e.EndTimestamp >= seg.StartTime && e.StartTimestamp < seg.EndTime {
-				segEvents = append(segEvents, vision.EventRef{EventType: e.EventType, Label: e.Label, Start: e.StartTimestamp, End: e.EndTimestamp})
+			eEnd := e.StartTimestamp
+			if e.EndTimestamp != nil {
+				eEnd = *e.EndTimestamp
 			}
+			if eEnd < seg.StartTime || e.StartTimestamp >= seg.EndTime {
+				continue
+			}
+			segEvents = append(segEvents, vision.EventInput{EventType: e.EventType, Label: e.Label, Start: e.StartTimestamp, End: e.EndTimestamp})
 		}
-
-		input := vision.SegmentDescriptionInput{
-			VideoID: videoID, SegmentID: seg.ID, StartTime: seg.StartTime, EndTime: seg.EndTime,
-			Frames: frameRefs, Detections: detRefs, Tracks: segTracks, Events: segEvents,
-		}
-		result, err := s.describer.DescribeSegment(ctx, input)
-		if err != nil {
-			return nil, fmt.Errorf("describe segment %d: %w", seg.SegmentIndex, err)
-		}
-		if result.Description == "" {
-			return nil, fmt.Errorf("empty description for segment %d", seg.SegmentIndex)
-		}
-		if len(result.Description) > 2000 {
-			result.Description = result.Description[:2000]
-		}
-		if result.ModelName == "" {
-			result.ModelName = "deterministic-local"
-		}
-		if result.ModelVersion == "" {
-			result.ModelVersion = "1"
-		}
-		descs = append(descs, Description{
-			VideoID: videoID, SegmentID: seg.ID,
-			Description: result.Description,
-			ModelName: result.ModelName,
-			ModelVersion: result.ModelVersion,
+		segInputs = append(segInputs, vision.SegmentInput{
+			SegmentID: seg.ID, StartTime: seg.StartTime, EndTime: seg.EndTime,
+			Frames: segFrames, Detections: segDets, Tracks: segTracks, Events: segEvents,
 		})
 	}
 
-	saved, err := s.repo.ReplaceForVideo(ctx, videoID, descs)
+	// Invoke the VLM exactly once for the video. Descriptions must come
+	// from visual inspection; never synthesize from metadata here.
+	results, err := s.describer.DescribeVideo(ctx, vision.VideoDescriptionInput{VideoID: videoID, Segments: segInputs})
 	if err != nil {
 		return nil, err
 	}
-	return saved, nil
+	if len(results) != len(segments) {
+		return nil, fmt.Errorf("vision returned %d descriptions for %d segments", len(results), len(segments))
+	}
+	bySegment := map[uuid.UUID]vision.DescriptionResult{}
+	for _, r := range results {
+		if r.Description == "" {
+			return nil, fmt.Errorf("empty vision description for segment %s", r.SegmentID)
+		}
+		if _, dup := bySegment[r.SegmentID]; dup {
+			return nil, fmt.Errorf("duplicate vision description for segment %s", r.SegmentID)
+		}
+		bySegment[r.SegmentID] = r
+	}
+
+	var descs []Description
+	for _, seg := range segments {
+		r, ok := bySegment[seg.ID]
+		if !ok {
+			return nil, fmt.Errorf("missing vision description for segment %d", seg.SegmentIndex)
+		}
+		desc := strings.TrimSpace(r.Description)
+		if desc == "" {
+			return nil, fmt.Errorf("empty vision description for segment %d", seg.SegmentIndex)
+		}
+		if len(desc) > 2000 {
+			return nil, fmt.Errorf("vision description for segment %d exceeds 2000 characters", seg.SegmentIndex)
+		}
+		if r.SegmentID != seg.ID {
+			return nil, fmt.Errorf("vision description segment ID mismatch for segment %d", seg.SegmentIndex)
+		}
+		if r.ModelName != s.expectedModelName {
+			return nil, fmt.Errorf("vision description model name mismatch for segment %d", seg.SegmentIndex)
+		}
+		if r.ModelVersion != s.expectedModelVersion {
+			return nil, fmt.Errorf("vision description model version mismatch for segment %d", seg.SegmentIndex)
+		}
+		descs = append(descs, Description{
+			VideoID: videoID, SegmentID: seg.ID,
+			Description: desc,
+			ModelName: r.ModelName, ModelVersion: r.ModelVersion,
+		})
+	}
+
+	return s.repo.ReplaceForVideo(ctx, videoID, descs)
 }
 
 func (s *Service) GetByVideoID(ctx context.Context, videoID uuid.UUID) ([]Description, error) {

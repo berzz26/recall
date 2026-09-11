@@ -3,6 +3,7 @@ package segment_description
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -65,7 +66,10 @@ func (r *Repository) ReplaceForVideo(ctx context.Context, videoID uuid.UUID, des
 }
 
 func (r *Repository) GetByVideoID(ctx context.Context, videoID uuid.UUID) ([]Description, error) {
-	query := fmt.Sprintf(`SELECT %s FROM video_segment_descriptions WHERE video_id = $1 ORDER BY created_at ASC`, fields)
+	query := fmt.Sprintf(`
+		SELECT %s FROM video_segment_descriptions
+		WHERE video_id = $1
+		ORDER BY (SELECT start_time FROM video_segments WHERE id = segment_id) ASC, created_at ASC`, fields)
 	rows, err := r.db.Query(ctx, query, videoID)
 	if err != nil {
 		return nil, err
@@ -81,6 +85,49 @@ func (r *Repository) GetByVideoID(ctx context.Context, videoID uuid.UUID) ([]Des
 	}
 	if list == nil {
 		list = []Description{}
+	}
+	return list, rows.Err()
+}
+
+type DescriptionWithTimes struct {
+	ID           uuid.UUID
+	VideoID      uuid.UUID
+	SegmentID    uuid.UUID
+	Description  string
+	ModelName    string
+	ModelVersion string
+	StartTime    float64
+	EndTime      float64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+func (r *Repository) GetByVideoIDWithSegments(ctx context.Context, videoID uuid.UUID) ([]DescriptionWithTimes, error) {
+	query := fmt.Sprintf(`
+		SELECT d.id, d.video_id, d.segment_id, d.description, d.model_name, d.model_version,
+		       d.created_at, d.updated_at,
+		       COALESCE(s.start_time, 0), COALESCE(s.end_time, 0)
+		FROM video_segment_descriptions d
+		LEFT JOIN video_segments s ON s.id = d.segment_id
+		WHERE d.video_id = $1
+		ORDER BY s.start_time ASC, d.created_at ASC`)
+	rows, err := r.db.Query(ctx, query, videoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []DescriptionWithTimes
+	for rows.Next() {
+		var d DescriptionWithTimes
+		err := rows.Scan(&d.ID, &d.VideoID, &d.SegmentID, &d.Description, &d.ModelName, &d.ModelVersion,
+			&d.CreatedAt, &d.UpdatedAt, &d.StartTime, &d.EndTime)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, d)
+	}
+	if list == nil {
+		list = []DescriptionWithTimes{}
 	}
 	return list, rows.Err()
 }

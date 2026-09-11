@@ -129,6 +129,8 @@ export interface SegmentDescription {
   id: string
   video_id: string
   segment_id: string
+  start_time: number
+  end_time: number
   description: string
   model_name: string
   model_version: string

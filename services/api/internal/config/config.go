@@ -32,6 +32,7 @@ type Config struct {
 	ModelPath           string
 	PythonPath          string
 	EventMovementThreshold float64
+	VisionPythonPath    string
 	VisionModel         string
 	VisionModelVersion  string
 	VisionMaxFrames     int
@@ -181,23 +182,27 @@ func Load() Config {
 		}
 	}
 
+	visionPythonPath := os.Getenv("VISION_PYTHON_PATH")
+	if visionPythonPath == "" {
+		visionPythonPath = "python3"
+	}
 	visionModel := os.Getenv("VISION_MODEL")
 	if visionModel == "" {
-		visionModel = "deterministic-local"
+		visionModel = "Qwen/Qwen3-VL-2B-Instruct"
 	}
 	visionVersion := os.Getenv("VISION_MODEL_VERSION")
 	if visionVersion == "" {
-		visionVersion = "1"
+		visionVersion = "2B-Instruct"
 	}
 	visionMaxFrames := 6
-	if v := os.Getenv("VISION_MAX_FRAMES_PER_SEGMENT"); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 20 {
-			visionMaxFrames = parsed
-		} else {
-			panic(fmt.Sprintf("invalid VISION_MAX_FRAMES_PER_SEGMENT %q", v))
+	if v := os.Getenv("VISION_MAX_FRAMES"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed < 1 {
+			panic(fmt.Sprintf("invalid VISION_MAX_FRAMES %q: must be >= 1", v))
 		}
+		visionMaxFrames = parsed
 	}
-	visionTimeout := 30 * time.Second
+	visionTimeout := 10 * time.Minute
 	if v := os.Getenv("VISION_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			visionTimeout = d
@@ -229,6 +234,7 @@ func Load() Config {
 		ModelPath:           modelPath,
 		PythonPath:          pythonPath,
 		EventMovementThreshold: movementThreshold,
+		VisionPythonPath:    visionPythonPath,
 		VisionModel:         visionModel,
 		VisionModelVersion:  visionVersion,
 		VisionMaxFrames:     visionMaxFrames,

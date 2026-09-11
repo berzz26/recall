@@ -233,7 +233,7 @@ func (h *VideoDetailHandler) GetDescriptions(c *fiber.Ctx) error {
 	}
 	ctx, cancel := context.WithTimeout(c.UserContext(), 5*time.Second)
 	defer cancel()
-	descs, err := h.descRepo.GetByVideoID(ctx, id)
+	descs, err := h.descRepo.GetByVideoIDWithSegments(ctx, id)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "failed"})
 	}
