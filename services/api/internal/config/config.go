@@ -7,9 +7,10 @@ import (
 )
 
 type Config struct {
-	Env  string
-	Port string
-	Addr string
+	Env         string
+	Port        string
+	Addr        string
+	DatabaseURL string
 }
 
 func Load() Config {
@@ -25,9 +26,15 @@ func Load() Config {
 		port = "8080"
 	}
 
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://recall:recall@localhost:5436/recall?sslmode=disable"
+	}
+
 	return Config{
-		Env:  env,
-		Port: port,
-		Addr: ":" + port,
+		Env:         env,
+		Port:        port,
+		Addr:        ":" + port,
+		DatabaseURL: dbURL,
 	}
 }

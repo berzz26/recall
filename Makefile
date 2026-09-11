@@ -1,4 +1,4 @@
-.PHONY: run build tidy fmt test docker-build docker-up
+.PHONY: run build tidy fmt test docker-build docker-up docker-down db-up migrate-up migrate-down migrate-create migrate-install
 
 run:
 	go run ./services/api/cmd/server
@@ -23,3 +23,19 @@ docker-up:
 
 docker-down:
 	docker compose down
+
+db-up:
+	docker compose up -d postgres
+
+migrate-up:
+	migrate -path migrations -database "${DATABASE_URL}" up
+
+migrate-down:
+	migrate -path migrations -database "${DATABASE_URL}" down 1
+
+migrate-create:
+	@read -p "Enter migration name: " name; \
+	migrate create -ext sql -dir migrations -seq $$name
+
+migrate-install:
+	go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
