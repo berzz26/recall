@@ -16,13 +16,15 @@ import (
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/berzz26/recall/services/api/internal/video_media"
+	"github.com/berzz26/recall/services/api/internal/video_segment"
 )
 
 type FFprobeProcessor struct {
-	ffprobePath  string
-	timeout      time.Duration
-	storage      storage.Storage
-	mediaService *video_media.Service
+	ffprobePath    string
+	timeout        time.Duration
+	storage        storage.Storage
+	mediaService   *video_media.Service
+	segmentService *video_segment.Service
 }
 
 func NewFFprobeProcessor(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service) *FFprobeProcessor {
@@ -38,6 +40,12 @@ func NewFFprobeProcessor(ffprobePath string, timeout time.Duration, store storag
 		storage:      store,
 		mediaService: mediaService,
 	}
+}
+
+func NewFFprobeProcessorWithSegments(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service, segmentService *video_segment.Service) *FFprobeProcessor {
+	p := NewFFprobeProcessor(ffprobePath, timeout, store, mediaService)
+	p.segmentService = segmentService
+	return p
 }
 
 type probeResult struct {
@@ -259,6 +267,15 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 
 	if _, err := p.mediaService.Upsert(ctx, meta); err != nil {
 		return fmt.Errorf("failed to persist media metadata: %w", err)
+	}
+
+	if p.segmentService != nil {
+		if meta.DurationSeconds == nil || *meta.DurationSeconds <= 0 {
+			return fmt.Errorf("video duration unavailable; cannot generate segments")
+		}
+		if _, err := p.segmentService.GenerateForVideo(ctx, v.ID, *meta.DurationSeconds); err != nil {
+			return fmt.Errorf("failed to generate segments: %w", err)
+		}
 	}
 
 	slog.Info("ffprobe success", "video_id", v.ID.String())

@@ -21,6 +21,7 @@ type Config struct {
 	PollInterval       time.Duration
 	FFprobePath        string
 	FFprobeTimeout     time.Duration
+	SegmentDuration    time.Duration
 }
 
 func Load() Config {
@@ -80,6 +81,18 @@ func Load() Config {
 		}
 	}
 
+	segmentDuration := 30 * time.Second
+	if v := os.Getenv("VIDEO_SEGMENT_DURATION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			if d <= 0 {
+				panic(fmt.Sprintf("VIDEO_SEGMENT_DURATION must be > 0, got %s", v))
+			}
+			segmentDuration = d
+		} else {
+			panic(fmt.Sprintf("invalid VIDEO_SEGMENT_DURATION %q: %v", v, err))
+		}
+	}
+
 	return Config{
 		Env:               env,
 		Port:              port,
@@ -92,5 +105,6 @@ func Load() Config {
 		PollInterval:      pollInterval,
 		FFprobePath:       ffprobePath,
 		FFprobeTimeout:    ffprobeTimeout,
+		SegmentDuration:   segmentDuration,
 	}
 }
