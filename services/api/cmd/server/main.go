@@ -19,11 +19,13 @@ import (
 	"github.com/berzz26/recall/services/api/internal/processing"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
+	"github.com/berzz26/recall/services/api/internal/segment_description"
 	"github.com/berzz26/recall/services/api/internal/video_event"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
 	"github.com/berzz26/recall/services/api/internal/video_track"
+	"github.com/berzz26/recall/services/api/internal/vision"
 	"github.com/berzz26/recall/services/api/internal/visual"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -93,6 +95,10 @@ func main() {
 	eventRepo := video_event.NewRepository(db.DB)
 	eventService := video_event.NewServiceWithThreshold(eventRepo, trackRepo, videoSegmentRepo, detectionRepo, cfg.EventMovementThreshold)
 
+	segmentDescRepo := segment_description.NewRepository(db.DB)
+	describer := vision.NewDeterministicDescriber(cfg.VisionModel, cfg.VisionModelVersion, cfg.VisionMaxFrames)
+	segmentDescService := segment_description.NewService(segmentDescRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, describer, cfg.VisionMaxFrames)
+
 	localSourceRepo := local_source.NewRepository(db.DB)
 	localSourceService := local_source.NewService(localSourceRepo, videoService, cfg.StabilityDuration)
 	localSourceHandler := local_source.NewHandler(localSourceService)
@@ -113,7 +119,7 @@ func main() {
 		slog.Warn("ffmpeg not found, frame extraction will fail", "path", cfg.FFmpegPath, "error", err)
 	}
 
-	processor := processing.NewFFprobeProcessorWithEvents(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService, visualService, trackService, eventService)
+	processor := processing.NewFFprobeProcessorWithDescriptions(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService, visualService, trackService, eventService, segmentDescService)
 	worker := processing.NewWorker(videoService, processor, cfg.PollInterval)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	go worker.Start(workerCtx)
@@ -142,7 +148,7 @@ func main() {
 
 	app.Get("/health", healthHandler.Check)
 
-	detailHandler := handlers.NewVideoDetailHandlerWithEvents(videoMediaRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, store)
+	detailHandler := handlers.NewVideoDetailHandlerWithDescriptions(videoMediaRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, segmentDescRepo, store)
 
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
@@ -156,6 +162,8 @@ func main() {
 	v1.Get("/tracks/:trackId/detections", detailHandler.GetTrackDetections)
 	v1.Get("/videos/:id/events", detailHandler.GetEvents)
 	v1.Get("/tracks/:trackId/events", detailHandler.GetTrackEvents)
+	v1.Get("/videos/:id/descriptions", detailHandler.GetDescriptions)
+	v1.Get("/videos/:id/segments/:segmentId/description", detailHandler.GetSegmentDescription)
 	v1.Post("/ingest/local", videoHandler.IngestLocal)
 	v1.Mount("/local-sources", localSourceHandler.SetupRoutes())
 

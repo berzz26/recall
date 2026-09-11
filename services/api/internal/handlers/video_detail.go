@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/berzz26/recall/services/api/internal/detection"
+	"github.com/berzz26/recall/services/api/internal/segment_description"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video_event"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
@@ -24,6 +25,7 @@ type VideoDetailHandler struct {
 	detectionRepo *detection.Repository
 	trackRepo     *video_track.Repository
 	eventRepo     *video_event.Repository
+	descRepo      *segment_description.Repository
 	storage       storage.Storage
 }
 
@@ -37,6 +39,10 @@ func NewVideoDetailHandlerWithTracks(mr *video_media.Repository, sr *video_segme
 
 func NewVideoDetailHandlerWithEvents(mr *video_media.Repository, sr *video_segment.Repository, fr *video_frame.Repository, dr *detection.Repository, tr *video_track.Repository, er *video_event.Repository, st storage.Storage) *VideoDetailHandler {
 	return &VideoDetailHandler{mediaRepo: mr, segmentRepo: sr, frameRepo: fr, detectionRepo: dr, trackRepo: tr, eventRepo: er, storage: st}
+}
+
+func NewVideoDetailHandlerWithDescriptions(mr *video_media.Repository, sr *video_segment.Repository, fr *video_frame.Repository, dr *detection.Repository, tr *video_track.Repository, er *video_event.Repository, dr2 *segment_description.Repository, st storage.Storage) *VideoDetailHandler {
+	return &VideoDetailHandler{mediaRepo: mr, segmentRepo: sr, frameRepo: fr, detectionRepo: dr, trackRepo: tr, eventRepo: er, descRepo: dr2, storage: st}
 }
 
 func (h *VideoDetailHandler) GetMedia(c *fiber.Ctx) error {
@@ -215,4 +221,38 @@ func (h *VideoDetailHandler) GetTrackEvents(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "failed"})
 	}
 	return c.JSON(events)
+}
+
+func (h *VideoDetailHandler) GetDescriptions(c *fiber.Ctx) error {
+	if h.descRepo == nil {
+		return c.Status(500).JSON(fiber.Map{"error": "descriptions not configured"})
+	}
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid id"})
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 5*time.Second)
+	defer cancel()
+	descs, err := h.descRepo.GetByVideoID(ctx, id)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "failed"})
+	}
+	return c.JSON(descs)
+}
+
+func (h *VideoDetailHandler) GetSegmentDescription(c *fiber.Ctx) error {
+	if h.descRepo == nil {
+		return c.Status(500).JSON(fiber.Map{"error": "descriptions not configured"})
+	}
+	sid, err := uuid.Parse(c.Params("segmentId"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid segmentId"})
+	}
+	ctx, cancel := context.WithTimeout(c.UserContext(), 5*time.Second)
+	defer cancel()
+	desc, err := h.descRepo.GetBySegmentID(ctx, sid)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "description not found"})
+	}
+	return c.JSON(desc)
 }

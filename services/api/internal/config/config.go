@@ -32,6 +32,10 @@ type Config struct {
 	ModelPath           string
 	PythonPath          string
 	EventMovementThreshold float64
+	VisionModel         string
+	VisionModelVersion  string
+	VisionMaxFrames     int
+	VisionTimeout       time.Duration
 }
 
 func Load() Config {
@@ -177,6 +181,31 @@ func Load() Config {
 		}
 	}
 
+	visionModel := os.Getenv("VISION_MODEL")
+	if visionModel == "" {
+		visionModel = "deterministic-local"
+	}
+	visionVersion := os.Getenv("VISION_MODEL_VERSION")
+	if visionVersion == "" {
+		visionVersion = "1"
+	}
+	visionMaxFrames := 6
+	if v := os.Getenv("VISION_MAX_FRAMES_PER_SEGMENT"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 20 {
+			visionMaxFrames = parsed
+		} else {
+			panic(fmt.Sprintf("invalid VISION_MAX_FRAMES_PER_SEGMENT %q", v))
+		}
+	}
+	visionTimeout := 30 * time.Second
+	if v := os.Getenv("VISION_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			visionTimeout = d
+		} else {
+			panic(fmt.Sprintf("invalid VISION_TIMEOUT %q", v))
+		}
+	}
+
 	return Config{
 		Env:               env,
 		Port:              port,
@@ -200,5 +229,9 @@ func Load() Config {
 		ModelPath:           modelPath,
 		PythonPath:          pythonPath,
 		EventMovementThreshold: movementThreshold,
+		VisionModel:         visionModel,
+		VisionModelVersion:  visionVersion,
+		VisionMaxFrames:     visionMaxFrames,
+		VisionTimeout:       visionTimeout,
 	}
 }
