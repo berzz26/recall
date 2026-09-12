@@ -119,12 +119,33 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID) ([]De
 	slog.Info("segment_description: VLM invoke start", "video_id", videoID.String(), "segments", len(segInputs))
 	results, err := s.describer.DescribeVideo(ctx, vision.VideoDescriptionInput{VideoID: videoID, Segments: segInputs})
 	vlmMs := time.Since(vlmStart).Milliseconds()
-	if err != nil {
+	isRateLimited := err != nil && vision.IsRateLimited(err)
+	if err != nil && !isRateLimited {
 		slog.Error("segment_description: VLM failed", "video_id", videoID.String(), "duration_ms", vlmMs, "error", err)
 		return nil, err
 	}
-	slog.Info("segment_description: VLM complete", "video_id", videoID.String(), "segments", len(segInputs), "descriptions", len(results), "duration_ms", vlmMs)
-	if len(results) != len(segments) {
+	if isRateLimited {
+		if results == nil {
+			results = []vision.DescriptionResult{}
+		}
+		slog.Warn("segment_description: VLM rate limited, persisting partial descriptions", "video_id", videoID.String(), "duration_ms", vlmMs, "descriptions", len(results), "segments", len(segments), "error", err)
+		if len(results) == 0 {
+			slog.Info("segment_description: no descriptions due to rate limit, skipping (optional)", "video_id", videoID.String(), "duration_ms", vlmMs)
+			// Persisting empty clears any stale descriptions but does not fail pipeline since description is optional.
+			empty, repErr := s.repo.ReplaceForVideo(ctx, videoID, nil)
+			if repErr != nil {
+				slog.Error("segment_description: persist failed after rate limit", "video_id", videoID.String(), "error", repErr)
+				return nil, repErr
+			}
+			return empty, nil
+		}
+	} else {
+		slog.Info("segment_description: VLM complete", "video_id", videoID.String(), "segments", len(segInputs), "descriptions", len(results), "duration_ms", vlmMs)
+	}
+	if !isRateLimited && len(results) != len(segments) {
+		return nil, fmt.Errorf("vision returned %d descriptions for %d segments", len(results), len(segments))
+	}
+	if isRateLimited && len(results) > len(segments) {
 		return nil, fmt.Errorf("vision returned %d descriptions for %d segments", len(results), len(segments))
 	}
 	bySegment := map[uuid.UUID]vision.DescriptionResult{}
@@ -142,6 +163,10 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID) ([]De
 	for _, seg := range segments {
 		r, ok := bySegment[seg.ID]
 		if !ok {
+			if isRateLimited {
+				slog.Warn("segment_description: missing description for segment due to rate limit, skipping", "video_id", videoID.String(), "segment_index", seg.SegmentIndex, "segment_id", seg.ID.String())
+				continue
+			}
 			return nil, fmt.Errorf("missing vision description for segment %d", seg.SegmentIndex)
 		}
 		desc := strings.TrimSpace(r.Description)

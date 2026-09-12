@@ -16,6 +16,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/segment_description"
 	"github.com/berzz26/recall/services/api/internal/segment_embedding"
 	"github.com/berzz26/recall/services/api/internal/storage"
+	"github.com/berzz26/recall/services/api/internal/vision"
 	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/berzz26/recall/services/api/internal/video_event"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
@@ -425,11 +426,18 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 		vlmStart := time.Now()
 		slog.Info("pipeline: VLM generation start", "video_id", v.ID.String())
 		if _, err := p.descService.GenerateForVideo(ctx, v.ID); err != nil {
-			slog.Error("pipeline: VLM generation failed", "video_id", v.ID.String(), "duration_ms", time.Since(vlmStart).Milliseconds(), "error", err)
-			return fmt.Errorf("failed to generate descriptions: %w", err)
+			// Description is optional: rate-limited errors must not fail the pipeline.
+			// Preserve partial descriptions (if any) and continue to embedding.
+			if vision.IsRateLimited(err) {
+				slog.Warn("pipeline: VLM rate limited, continuing pipeline (description optional)", "video_id", v.ID.String(), "duration_ms", time.Since(vlmStart).Milliseconds(), "error", err)
+			} else {
+				slog.Error("pipeline: VLM generation failed", "video_id", v.ID.String(), "duration_ms", time.Since(vlmStart).Milliseconds(), "error", err)
+				return fmt.Errorf("failed to generate descriptions: %w", err)
+			}
+		} else {
+			vlmMs := time.Since(vlmStart).Milliseconds()
+			slog.Info("pipeline: VLM generation complete", "video_id", v.ID.String(), "duration_ms", vlmMs)
 		}
-		vlmMs := time.Since(vlmStart).Milliseconds()
-		slog.Info("pipeline: VLM generation complete", "video_id", v.ID.String(), "duration_ms", vlmMs)
 	} else {
 		slog.Info("pipeline: VLM generation skipped (disabled)", "video_id", v.ID.String())
 	}

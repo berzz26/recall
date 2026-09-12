@@ -257,7 +257,7 @@ func (g *GeminiDescriber) DescribeVideo(ctx context.Context, input VideoDescript
 			return nil, fmt.Errorf("failed to read gemini response: %w", err)
 		}
 		if resp.StatusCode == 429 {
-			return nil, fmt.Errorf("gemini rate limited for segment %s: HTTP 429 %s", seg.SegmentID, string(body))
+			return results, fmt.Errorf("%w: gemini rate limited for segment %s: HTTP 429 %s", ErrRateLimited, seg.SegmentID, string(body))
 		}
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
 			return nil, fmt.Errorf("gemini authentication failed for segment %s: HTTP %d", seg.SegmentID, resp.StatusCode)

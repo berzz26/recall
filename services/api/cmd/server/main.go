@@ -200,7 +200,8 @@ func main() {
 	app.Use(recover.New())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "*",
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization, Range",
+		ExposeHeaders: "Content-Range, Accept-Ranges, Content-Length, Content-Type",
 		AllowMethods: "GET,POST,DELETE,OPTIONS",
 	}))
 	if cfg.Env == "development" {

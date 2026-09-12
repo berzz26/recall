@@ -2,8 +2,8 @@ package handlers
 
 import (
 	"context"
-	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/berzz26/recall/services/api/internal/storage"
@@ -32,37 +32,37 @@ func (h *VideoStreamHandler) Stream(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "video not found"})
 	}
-	// Prefer storage key for UPLOAD, else source_path for LOCAL
+	mime := v.MimeType
+	if mime == "" {
+		mime = "video/mp4"
+	}
+	// Prefer storage key for UPLOAD
 	if v.StorageKey != nil && *v.StorageKey != "" {
-		rc, err := h.storage.Open(ctx, *v.StorageKey)
-		if err == nil {
+		// Try SendFile for LocalStorage to support Range requests and avoid loading whole file
+		if ls, ok := h.storage.(*storage.LocalStorage); ok {
+			p := filepath.Join(ls.Root(), *v.StorageKey)
+			if _, err := os.Stat(p); err == nil {
+				c.Set("Content-Type", mime)
+				c.Set("Accept-Ranges", "bytes")
+				return c.SendFile(p)
+			}
+		}
+		// Fallback: stream via storage Open with SendStream (for non-local storage)
+		// Use Fiber's SendStream if file exists but not local
+		if rc, err := h.storage.Open(ctx, *v.StorageKey); err == nil {
 			defer rc.Close()
-			c.Set("Content-Type", v.MimeType)
-			if v.MimeType == "" {
-				c.Set("Content-Type", "video/mp4")
-			}
+			c.Set("Content-Type", mime)
 			c.Set("Accept-Ranges", "bytes")
-			data, err := io.ReadAll(rc)
-			if err != nil {
-				return c.Status(500).JSON(fiber.Map{"error": "failed to read video"})
-			}
-			return c.Send(data)
+			// For fallback we still need to avoid ReadAll; stream directly
+			return c.SendStream(rc)
 		}
 	}
 	if v.SourcePath != nil && *v.SourcePath != "" {
-		f, err := os.Open(*v.SourcePath)
-		if err == nil {
-			defer f.Close()
-			c.Set("Content-Type", v.MimeType)
-			if v.MimeType == "" {
-				c.Set("Content-Type", "video/mp4")
-			}
+		p := *v.SourcePath
+		if _, err := os.Stat(p); err == nil {
+			c.Set("Content-Type", mime)
 			c.Set("Accept-Ranges", "bytes")
-			data, err := io.ReadAll(f)
-			if err != nil {
-				return c.Status(500).JSON(fiber.Map{"error": "failed to read video"})
-			}
-			return c.Send(data)
+			return c.SendFile(p)
 		}
 	}
 	return c.Status(404).JSON(fiber.Map{"error": "video file not found"})

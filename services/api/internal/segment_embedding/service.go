@@ -41,7 +41,8 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID) ([]Em
 		return nil, err
 	}
 	if len(descs) == 0 {
-		return nil, fmt.Errorf("no descriptions for video %s: cannot generate embeddings without L2.8 descriptions", videoID)
+		slog.Info("embedding: no descriptions, skipping embedding generation (optional)", "video_id", videoID.String())
+		return []Embedding{}, nil
 	}
 	for _, d := range descs {
 		if d.Description == "" {
