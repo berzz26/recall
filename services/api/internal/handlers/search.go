@@ -62,7 +62,7 @@ func (h *SearchHandler) Search(c *fiber.Ctx) error {
 		}
 		videoID = &vid
 	}
-	ctx, cancel := context.WithTimeout(c.UserContext(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(c.UserContext(), 60*time.Second)
 	defer cancel()
 	vec, err := h.embedder.EmbedQuery(ctx, req.Query)
 	if err != nil {

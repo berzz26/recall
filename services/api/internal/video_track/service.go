@@ -7,10 +7,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/berzz26/recall/services/api/internal/detection"
 	"github.com/berzz26/recall/services/api/internal/tracker"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
+	"github.com/google/uuid"
 )
 
 type Service struct {
@@ -44,7 +44,12 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID, frame
 		slog.Info("tracking: no frames, skipped", "video_id", videoID.String(), "duration_ms", time.Since(trackStart).Milliseconds())
 		return []Track{}, nil
 	}
-	slog.Info("tracking: start", "video_id", videoID.String(), "frames", len(frames), "detections", len(detections), "tracker", func() string { if s.tracker != nil { return s.tracker.Name() }; return "iou" }())
+	slog.Info("tracking: start", "video_id", videoID.String(), "frames", len(frames), "detections", len(detections), "tracker", func() string {
+		if s.tracker != nil {
+			return s.tracker.Name()
+		}
+		return "iou"
+	}())
 	// order frames by timestamp / frame_index
 	sort.Slice(frames, func(i, j int) bool {
 		if frames[i].TimestampSeconds == frames[j].TimestampSeconds {
@@ -104,11 +109,11 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID, frame
 	}
 	// Group detections by trackIndex
 	type trackInfo struct {
-		Label string
-		Start float64
-		End   float64
+		Label     string
+		Start     float64
+		End       float64
 		SegmentID *uuid.UUID
-		Dets []detection.Detection
+		Dets      []detection.Detection
 	}
 	trackGroups := make(map[int]*trackInfo)
 	detectionByID := make(map[uuid.UUID]detection.Detection)
@@ -157,13 +162,13 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID, frame
 		}
 		// sort dets by timestamp for start/end already computed
 		t := Track{
-			VideoID: videoID,
-			SegmentID: info.SegmentID,
-			Label: info.Label,
-			TrackIndex: idx,
+			VideoID:        videoID,
+			SegmentID:      info.SegmentID,
+			Label:          info.Label,
+			TrackIndex:     idx,
 			StartTimestamp: info.Start,
-			EndTimestamp: info.End,
-			TrackerName: trackerName,
+			EndTimestamp:   info.End,
+			TrackerName:    trackerName,
 			TrackerVersion: trackerVersion,
 		}
 		if t.StartTimestamp > t.EndTimestamp {
@@ -178,8 +183,8 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID, frame
 				ts = f.TimestampSeconds
 			}
 			links = append(links, TrackDetection{
-				DetectionID: d.ID,
-				FrameID: fid,
+				DetectionID:      d.ID,
+				FrameID:          fid,
 				TimestampSeconds: ts,
 			})
 		}

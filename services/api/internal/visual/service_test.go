@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/berzz26/recall/pkg/database"
 	"github.com/berzz26/recall/services/api/internal/detection"
 	"github.com/berzz26/recall/services/api/internal/detector"
@@ -16,6 +15,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
+	"github.com/google/uuid"
 )
 
 func newTestVisualDeps(t *testing.T, analyzer detector.VisualAnalyzer) (*Service, *video_frame.Service, *video_segment.Service, *video_media.Service, *database.Service, storage.Storage, string) {

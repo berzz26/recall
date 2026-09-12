@@ -18,6 +18,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/health"
 	local_source "github.com/berzz26/recall/services/api/internal/local_source"
 	"github.com/berzz26/recall/services/api/internal/processing"
+	"github.com/berzz26/recall/services/api/internal/search"
 	"github.com/berzz26/recall/services/api/internal/segment_description"
 	"github.com/berzz26/recall/services/api/internal/segment_embedding"
 	"github.com/berzz26/recall/services/api/internal/storage"
@@ -180,6 +181,8 @@ func main() {
 
 	processor := processing.NewFFprobeProcessorWithEmbeddings(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService, visualService, trackService, eventService, segmentDescService, embedServiceForPipeline)
 	searchHandler := handlers.NewSearchHandler(embedder, embedRepo)
+	searchService := search.NewService(embedder, embedRepo, db.DB, videoRepo, cfg.SearchCandidateLimit, cfg.SearchDefaultLimit, cfg.SearchMaxLimit, cfg.SearchMinSimilarity)
+	unifiedSearchHandler := handlers.NewUnifiedSearchHandler(searchService)
 	worker := processing.NewWorker(videoService, processor, cfg.PollInterval)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	go worker.Start(workerCtx)
@@ -209,11 +212,13 @@ func main() {
 	app.Get("/health", healthHandler.Check)
 
 	detailHandler := handlers.NewVideoDetailHandlerWithDescriptions(videoMediaRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, segmentDescRepo, store)
+	videoStreamHandler := handlers.NewVideoStreamHandler(videoRepo, store)
 
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 	v1.Mount("/videos", videoHandler.SetupRoutes())
 	v1.Get("/videos/:id/media", detailHandler.GetMedia)
+	v1.Get("/videos/:id/stream", videoStreamHandler.Stream)
 	v1.Get("/videos/:id/segments", detailHandler.GetSegments)
 	v1.Get("/videos/:id/frames", detailHandler.GetFrames)
 	v1.Get("/videos/:id/detections", detailHandler.GetDetections)
@@ -227,6 +232,7 @@ func main() {
 	v1.Post("/ingest/local", videoHandler.IngestLocal)
 	v1.Mount("/local-sources", localSourceHandler.SetupRoutes())
 	v1.Post("/search/semantic", searchHandler.Search)
+	v1.Post("/search", unifiedSearchHandler.Search)
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

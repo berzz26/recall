@@ -23,15 +23,15 @@ const (
 )
 
 type SmolVLMDescriber struct {
-	pythonPath       string
-	scriptPath       string
-	modelName        string
-	modelPath        string
-	modelVersion     string
-	maxFrames        int
-	maxOutputTokens  int
-	timeout          time.Duration
-	store            storage.Storage
+	pythonPath      string
+	scriptPath      string
+	modelName       string
+	modelPath       string
+	modelVersion    string
+	maxFrames       int
+	maxOutputTokens int
+	timeout         time.Duration
+	store           storage.Storage
 }
 
 func NewSmolVLMDescriber(pythonPath, scriptPath, modelName, modelVersion string, maxFrames int, store storage.Storage, timeout time.Duration) *SmolVLMDescriber {

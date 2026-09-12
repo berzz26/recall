@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useEffect, useState, useRef } from 'react'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { client } from '../api/client'
 import type { Video, MediaMetadata, Segment, Frame, Detection, Track, Event, SegmentDescription } from '../api/types'
 import { StatusBadge } from '../components/StatusBadge'
@@ -8,6 +8,8 @@ import { Loading, ErrorState } from '../components/Loading'
 export default function VideoDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const videoRef = useRef<HTMLVideoElement>(null)
   const [video, setVideo] = useState<Video | null>(null)
   const [media, setMedia] = useState<MediaMetadata | null>(null)
   const [segments, setSegments] = useState<Segment[]>([])
@@ -53,6 +55,26 @@ export default function VideoDetail() {
 
   useEffect(() => { fetchAll() }, [id])
 
+  // Timestamp seeking via ?t=
+  useEffect(() => {
+    const tStr = searchParams.get('t')
+    if (tStr === null) return
+    const tVal = parseFloat(tStr)
+    if (isNaN(tVal) || !isFinite(tVal)) return
+    const clamped = tVal < 0 ? 0 : tVal
+    const el = videoRef.current
+    if (!el) return
+    const seek = () => {
+      try { el.currentTime = clamped } catch {}
+    }
+    if (el.readyState >= 1) {
+      seek()
+    } else {
+      el.addEventListener('loadedmetadata', seek, { once: true })
+      return () => el.removeEventListener('loadedmetadata', seek)
+    }
+  }, [searchParams, video])
+
   useEffect(() => {
     if (!video || (video.status !== 'UPLOADED' && video.status !== 'PROCESSING')) return
     const t = setInterval(fetchAll, 3000)
@@ -87,6 +109,15 @@ export default function VideoDetail() {
   return (
     <div>
       <div className="card">
+        <div style={{ marginBottom: 12 }}>
+          <video
+            ref={videoRef}
+            controls
+            preload="metadata"
+            style={{ width: '100%', maxHeight: 480, background: '#000', borderRadius: 8 }}
+            src={client.imageUrl(`/api/v1/videos/${video.id}/stream`)}
+          />
+        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
           <h3 style={{ margin: 0 }}>{video.filename} <StatusBadge status={video.status} /></h3>
           <button className="btn" style={{ color: '#f87171', borderColor: '#f87171' }} onClick={onDelete}>Delete Video</button>

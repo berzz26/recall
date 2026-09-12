@@ -7,6 +7,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Link to="/" className="logo">ReCall</Link>
         <NavLink to="/" end>Dashboard</NavLink>
         <NavLink to="/videos">Videos</NavLink>
+        <NavLink to="/search">Search</NavLink>
         <NavLink to="/local-sources">Local Sources</NavLink>
         <span className="spacer" />
         <a href="http://localhost:8080/health" target="_blank" rel="noreferrer">API</a>

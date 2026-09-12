@@ -8,10 +8,10 @@ import (
 )
 
 const (
-	EventAppeared   = "OBJECT_APPEARED"
-	EventPresent    = "OBJECT_PRESENT"
+	EventAppeared    = "OBJECT_APPEARED"
+	EventPresent     = "OBJECT_PRESENT"
 	EventDisappeared = "OBJECT_DISAPPEARED"
-	EventMoved      = "OBJECT_MOVED"
+	EventMoved       = "OBJECT_MOVED"
 )
 
 type Event struct {

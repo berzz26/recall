@@ -7,9 +7,9 @@ import (
 )
 
 type FrameInput struct {
-	ID          uuid.UUID
-	Timestamp   float64
-	StorageKey  string
+	ID         uuid.UUID
+	Timestamp  float64
+	StorageKey string
 }
 
 type DetectionInput struct {
