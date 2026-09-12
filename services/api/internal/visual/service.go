@@ -9,20 +9,20 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/berzz26/recall/services/api/internal/detection"
 	"github.com/berzz26/recall/services/api/internal/detector"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
+	"github.com/google/uuid"
 )
 
 type Service struct {
-	detectionRepo *detection.Repository
-	frameRepo     *video_frame.Repository
-	storage       storage.Storage
-	analyzer      detector.VisualAnalyzer
-	threshold     float64
-	detectorName  string
+	detectionRepo   *detection.Repository
+	frameRepo       *video_frame.Repository
+	storage         storage.Storage
+	analyzer        detector.VisualAnalyzer
+	threshold       float64
+	detectorName    string
 	detectorVersion string
 }
 
@@ -57,7 +57,7 @@ func (s *Service) AnalyzeVideo(ctx context.Context, videoID uuid.UUID) ([]detect
 	}
 	slog.Info("visual: start", "video_id", videoID.String(), "frames", len(frames), "threshold", s.threshold, "detector", s.detectorName)
 	type tmpFile struct {
-		path string
+		path  string
 		frame video_frame.VideoFrame
 	}
 	var tmps []tmpFile

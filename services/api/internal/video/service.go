@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/berzz26/recall/services/api/internal/storage"
+	"github.com/google/uuid"
 )
 
 type Service struct {

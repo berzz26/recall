@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"math"
 
-	"github.com/google/uuid"
 	"github.com/berzz26/recall/services/api/internal/detection"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
 	"github.com/berzz26/recall/services/api/internal/video_track"
+	"github.com/google/uuid"
 )
 
 type Service struct {
@@ -91,7 +91,7 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID) ([]Ev
 			continue
 		}
 		type detWithBBox struct {
-			Timestamp float64
+			Timestamp                  float64
 			BBoxX, BBoxY, BBoxW, BBoxH float64
 		}
 		var ordered []detWithBBox

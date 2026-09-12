@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useEffect, useState, useRef } from 'react'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { client } from '../api/client'
 import type { Video, MediaMetadata, Segment, Frame, Detection, Track, Event, SegmentDescription } from '../api/types'
 import { StatusBadge } from '../components/StatusBadge'
@@ -8,6 +8,8 @@ import { Loading, ErrorState } from '../components/Loading'
 export default function VideoDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const videoRef = useRef<HTMLVideoElement>(null)
   const [video, setVideo] = useState<Video | null>(null)
   const [media, setMedia] = useState<MediaMetadata | null>(null)
   const [segments, setSegments] = useState<Segment[]>([])
@@ -21,6 +23,8 @@ export default function VideoDetail() {
   const [descriptions, setDescriptions] = useState<SegmentDescription[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [selectedFrame, setSelectedFrame] = useState<Frame | null>(null)
+  const [tracksCollapsed, setTracksCollapsed] = useState(false)
+  const [eventsCollapsed, setEventsCollapsed] = useState(false)
 
   const fetchAll = async () => {
     if (!id) return
@@ -50,6 +54,26 @@ export default function VideoDetail() {
   }
 
   useEffect(() => { fetchAll() }, [id])
+
+  // Timestamp seeking via ?t=
+  useEffect(() => {
+    const tStr = searchParams.get('t')
+    if (tStr === null) return
+    const tVal = parseFloat(tStr)
+    if (isNaN(tVal) || !isFinite(tVal)) return
+    const clamped = tVal < 0 ? 0 : tVal
+    const el = videoRef.current
+    if (!el) return
+    const seek = () => {
+      try { el.currentTime = clamped } catch {}
+    }
+    if (el.readyState >= 1) {
+      seek()
+    } else {
+      el.addEventListener('loadedmetadata', seek, { once: true })
+      return () => el.removeEventListener('loadedmetadata', seek)
+    }
+  }, [searchParams, video])
 
   useEffect(() => {
     if (!video || (video.status !== 'UPLOADED' && video.status !== 'PROCESSING')) return
@@ -85,6 +109,15 @@ export default function VideoDetail() {
   return (
     <div>
       <div className="card">
+        <div style={{ marginBottom: 12 }}>
+          <video
+            ref={videoRef}
+            controls
+            preload="metadata"
+            style={{ width: '100%', maxHeight: 480, background: '#000', borderRadius: 8 }}
+            src={client.imageUrl(`/api/v1/videos/${video.id}/stream`)}
+          />
+        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
           <h3 style={{ margin: 0 }}>{video.filename} <StatusBadge status={video.status} /></h3>
           <button className="btn" style={{ color: '#f87171', borderColor: '#f87171' }} onClick={onDelete}>Delete Video</button>
@@ -140,8 +173,19 @@ export default function VideoDetail() {
       </div>
 
       <div className="card">
-        <h3>Tracks ({tracks.length})</h3>
-        {tracks.length === 0 ? <div className="empty">No tracks</div> : (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: tracksCollapsed ? 0 : 12 }}>
+          <h3 style={{ margin: 0 }}>Tracks ({tracks.length})</h3>
+          <button
+            aria-label={tracksCollapsed ? 'Expand tracks' : 'Collapse tracks'}
+            onClick={() => setTracksCollapsed(v => !v)}
+            style={{ background: 'transparent', border: '1px solid #2a2e39', borderRadius: 6, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#9aa0b0', flexShrink: 0 }}
+            title={tracksCollapsed ? 'Expand' : 'Collapse'}
+          >
+            <span style={{ display: 'inline-block', transform: tracksCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', fontSize: 12, lineHeight: 1 }}>{tracksCollapsed ? '▶' : '▼'}</span>
+          </button>
+        </div>
+        {!tracksCollapsed && (
+          tracks.length === 0 ? <div className="empty">No tracks</div> : (
           <>
             <div style={{ marginBottom: 12 }}>
               <select
@@ -158,7 +202,7 @@ export default function VideoDetail() {
               </select>
             </div>
             {selectedTrack === 'all' ? (
-              <div className="summary" style={{ flexDirection: 'column', gap: 8 }}>
+              <div className="summary" style={{ flexDirection: 'column', gap: 8, maxHeight: 260, overflowY: 'auto', paddingRight: 4 }}>
                 {tracks.map(t => (
                   <div key={t.id} className="item" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                     <span style={{ minWidth: 80, fontWeight: 700, textTransform: 'uppercase' }}>{t.label}</span>
@@ -185,11 +229,23 @@ export default function VideoDetail() {
               })()
             )}
           </>
-        )}
+        ))}
       </div>
 
       <div className="card">
-        <h3>Events ({events.length})</h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: eventsCollapsed ? 0 : 12 }}>
+          <h3 style={{ margin: 0 }}>Events ({events.length})</h3>
+          <button
+            aria-label={eventsCollapsed ? 'Expand events' : 'Collapse events'}
+            onClick={() => setEventsCollapsed(v => !v)}
+            style={{ background: 'transparent', border: '1px solid #2a2e39', borderRadius: 6, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#9aa0b0', flexShrink: 0 }}
+            title={eventsCollapsed ? 'Expand' : 'Collapse'}
+          >
+            <span style={{ display: 'inline-block', transform: eventsCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', fontSize: 12, lineHeight: 1 }}>{eventsCollapsed ? '▶' : '▼'}</span>
+          </button>
+        </div>
+        {!eventsCollapsed && (
+          <>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
           <select value={eventFilter} onChange={e => setEventFilter(e.target.value)} style={{ padding: '6px 8px' }}>
             <option value="all">All events</option>
@@ -250,6 +306,8 @@ export default function VideoDetail() {
           </tbody>
         </table>
         {events.length === 0 && <div className="empty">No events</div>}
+          </>
+        )}
       </div>
 
       <div className="card">

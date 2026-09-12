@@ -13,11 +13,14 @@ import (
 	"github.com/berzz26/recall/services/api/internal/config"
 	"github.com/berzz26/recall/services/api/internal/detection"
 	"github.com/berzz26/recall/services/api/internal/detector"
+	"github.com/berzz26/recall/services/api/internal/embedding"
 	"github.com/berzz26/recall/services/api/internal/handlers"
 	"github.com/berzz26/recall/services/api/internal/health"
 	local_source "github.com/berzz26/recall/services/api/internal/local_source"
 	"github.com/berzz26/recall/services/api/internal/processing"
+	"github.com/berzz26/recall/services/api/internal/search"
 	"github.com/berzz26/recall/services/api/internal/segment_description"
+	"github.com/berzz26/recall/services/api/internal/segment_embedding"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/tracker"
 	"github.com/berzz26/recall/services/api/internal/video"
@@ -161,7 +164,25 @@ func main() {
 		slog.Warn("ffmpeg not found, frame extraction will fail", "path", cfg.FFmpegPath, "error", err)
 	}
 
-	processor := processing.NewFFprobeProcessorWithDescriptions(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService, visualService, trackService, eventService, segmentDescService)
+	// Embedding setup
+	embedRepo := segment_embedding.NewRepository(db.DB)
+	embedder := embedding.NewBGEEmbedder(cfg.EmbeddingPythonPath, "workers/embedding/embed.py", cfg.EmbeddingTimeout)
+	embedService := segment_embedding.NewService(embedRepo, segmentDescRepo, embedder, cfg.EmbeddingModel, cfg.EmbeddingModelVersion)
+	if cfg.EnableVideoDescription {
+		slog.Info("embedding provider selected", "model", cfg.EmbeddingModel, "version", cfg.EmbeddingModelVersion)
+	} else {
+		slog.Info("embedding generation will be skipped when descriptions disabled")
+	}
+	// Wire embedding into pipeline; if descriptions disabled, embedding will be skipped via nil check
+	var embedServiceForPipeline *segment_embedding.Service
+	if cfg.EnableVideoDescription {
+		embedServiceForPipeline = embedService
+	}
+
+	processor := processing.NewFFprobeProcessorWithEmbeddings(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService, visualService, trackService, eventService, segmentDescService, embedServiceForPipeline)
+	searchHandler := handlers.NewSearchHandler(embedder, embedRepo)
+	searchService := search.NewService(embedder, embedRepo, db.DB, videoRepo, cfg.SearchCandidateLimit, cfg.SearchDefaultLimit, cfg.SearchMaxLimit, cfg.SearchMinSimilarity)
+	unifiedSearchHandler := handlers.NewUnifiedSearchHandler(searchService)
 	worker := processing.NewWorker(videoService, processor, cfg.PollInterval)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	go worker.Start(workerCtx)
@@ -179,7 +200,8 @@ func main() {
 	app.Use(recover.New())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "*",
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization, Range",
+		ExposeHeaders: "Content-Range, Accept-Ranges, Content-Length, Content-Type",
 		AllowMethods: "GET,POST,DELETE,OPTIONS",
 	}))
 	if cfg.Env == "development" {
@@ -191,11 +213,13 @@ func main() {
 	app.Get("/health", healthHandler.Check)
 
 	detailHandler := handlers.NewVideoDetailHandlerWithDescriptions(videoMediaRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, segmentDescRepo, store)
+	videoStreamHandler := handlers.NewVideoStreamHandler(videoRepo, store)
 
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 	v1.Mount("/videos", videoHandler.SetupRoutes())
 	v1.Get("/videos/:id/media", detailHandler.GetMedia)
+	v1.Get("/videos/:id/stream", videoStreamHandler.Stream)
 	v1.Get("/videos/:id/segments", detailHandler.GetSegments)
 	v1.Get("/videos/:id/frames", detailHandler.GetFrames)
 	v1.Get("/videos/:id/detections", detailHandler.GetDetections)
@@ -208,6 +232,8 @@ func main() {
 	v1.Get("/videos/:id/segments/:segmentId/description", detailHandler.GetSegmentDescription)
 	v1.Post("/ingest/local", videoHandler.IngestLocal)
 	v1.Mount("/local-sources", localSourceHandler.SetupRoutes())
+	v1.Post("/search/semantic", searchHandler.Search)
+	v1.Post("/search", unifiedSearchHandler.Search)
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

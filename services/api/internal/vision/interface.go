@@ -2,14 +2,30 @@ package vision
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	"github.com/google/uuid"
 )
 
+var ErrRateLimited = errors.New("gemini rate limited")
+
+func IsRateLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrRateLimited) {
+		return true
+	}
+	// Fallback string match for wrapped errors without sentinel (e.g. "rate limited" / "429")
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "rate limited") || strings.Contains(msg, "429")
+}
+
 type FrameInput struct {
-	ID          uuid.UUID
-	Timestamp   float64
-	StorageKey  string
+	ID         uuid.UUID
+	Timestamp  float64
+	StorageKey string
 }
 
 type DetectionInput struct {

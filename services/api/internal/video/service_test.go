@@ -23,8 +23,8 @@ func newTestService(t *testing.T) *Service {
 	return NewService(repo)
 }
 
-func strPtr2(s string) *string { return &s }
-func int64Ptr(i int64) *int64 { return &i }
+func strPtr2(s string) *string           { return &s }
+func int64Ptr(i int64) *int64            { return &i }
 func sourcePtr(s SourceType) *SourceType { return &s }
 
 func TestServiceCreateAndGet(t *testing.T) {

@@ -42,6 +42,14 @@ type Config struct {
 	VisionMaxOutputTokens  int
 	VisionTimeout          time.Duration
 	GeminiAPIKey           string
+	EmbeddingPythonPath    string
+	EmbeddingModel         string
+	EmbeddingModelVersion  string
+	EmbeddingTimeout       time.Duration
+	SearchCandidateLimit   int
+	SearchDefaultLimit     int
+	SearchMaxLimit         int
+	SearchMinSimilarity    float64
 	EnableVideoDescription bool
 	TrackerType            string
 	TrackerHighThreshold   float64
@@ -269,6 +277,69 @@ func Load() Config {
 		}
 	}
 
+	embeddingPythonPath := os.Getenv("EMBEDDING_PYTHON_PATH")
+	if embeddingPythonPath == "" {
+		embeddingPythonPath = "python3"
+	}
+	embeddingModel := os.Getenv("EMBEDDING_MODEL")
+	if embeddingModel == "" {
+		embeddingModel = "BAAI/bge-small-en-v1.5"
+	}
+	embeddingModelVersion := os.Getenv("EMBEDDING_MODEL_VERSION")
+	if embeddingModelVersion == "" {
+		embeddingModelVersion = "v1.5"
+	}
+	embeddingTimeout := 5 * time.Minute
+	if v := os.Getenv("EMBEDDING_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			embeddingTimeout = d
+		} else {
+			panic(fmt.Sprintf("invalid EMBEDDING_TIMEOUT %q", v))
+		}
+	}
+
+	searchCandidateLimit := 20
+	if v := os.Getenv("SEARCH_CANDIDATE_LIMIT"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed < 1 {
+			panic(fmt.Sprintf("invalid SEARCH_CANDIDATE_LIMIT %q: must be >= 1", v))
+		}
+		searchCandidateLimit = parsed
+	}
+	searchDefaultLimit := 10
+	if v := os.Getenv("SEARCH_DEFAULT_LIMIT"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed < 1 {
+			panic(fmt.Sprintf("invalid SEARCH_DEFAULT_LIMIT %q: must be >= 1", v))
+		}
+		searchDefaultLimit = parsed
+	}
+	searchMaxLimit := 50
+	if v := os.Getenv("SEARCH_MAX_LIMIT"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed < 1 {
+			panic(fmt.Sprintf("invalid SEARCH_MAX_LIMIT %q: must be >= 1", v))
+		}
+		searchMaxLimit = parsed
+	}
+	if searchDefaultLimit > searchMaxLimit {
+		panic(fmt.Sprintf("SEARCH_DEFAULT_LIMIT (%d) must be <= SEARCH_MAX_LIMIT (%d)", searchDefaultLimit, searchMaxLimit))
+	}
+	if searchCandidateLimit < searchMaxLimit {
+		// allow candidate < max but warn? keep as is, no panic - spec defaults 20/50 is ok
+	}
+	searchMinSimilarity := 0.35
+	if v := os.Getenv("SEARCH_MIN_SIMILARITY"); v != "" {
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			panic(fmt.Sprintf("invalid SEARCH_MIN_SIMILARITY %q: %v", v, err))
+		}
+		if parsed < 0 || parsed > 1 {
+			panic(fmt.Sprintf("SEARCH_MIN_SIMILARITY must be 0..1, got %s", v))
+		}
+		searchMinSimilarity = parsed
+	}
+
 	enableVideoDescription := true
 	// Primary toggle: ENABLE_VIDEO_DESCRIPTION, aliases: ENABLE_VLM, VISION_ENABLED, ENABLE_DESCRIPTION
 	for _, key := range []string{"ENABLE_VIDEO_DESCRIPTION", "ENABLE_VLM", "VISION_ENABLED", "ENABLE_DESCRIPTION"} {
@@ -368,6 +439,14 @@ func Load() Config {
 		VisionMaxOutputTokens:  visionMaxOutputTokens,
 		VisionTimeout:          visionTimeout,
 		GeminiAPIKey:           geminiAPIKey,
+		EmbeddingPythonPath:    embeddingPythonPath,
+		EmbeddingModel:         embeddingModel,
+		EmbeddingModelVersion:  embeddingModelVersion,
+		EmbeddingTimeout:       embeddingTimeout,
+		SearchCandidateLimit:   searchCandidateLimit,
+		SearchDefaultLimit:     searchDefaultLimit,
+		SearchMaxLimit:         searchMaxLimit,
+		SearchMinSimilarity:    searchMinSimilarity,
 		EnableVideoDescription: enableVideoDescription,
 		TrackerType:            trackerType,
 		TrackerHighThreshold:   trackerHighThreshold,

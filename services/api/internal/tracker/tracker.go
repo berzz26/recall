@@ -8,15 +8,15 @@ import (
 )
 
 type DetectionInput struct {
-	ID        uuid.UUID
-	Label     string
+	ID         uuid.UUID
+	Label      string
 	Confidence float64
-	BBoxX     float64
-	BBoxY     float64
-	BBoxWidth float64
+	BBoxX      float64
+	BBoxY      float64
+	BBoxWidth  float64
 	BBoxHeight float64
-	FrameID   uuid.UUID
-	Timestamp float64
+	FrameID    uuid.UUID
+	Timestamp  float64
 }
 
 type FrameInput struct {
