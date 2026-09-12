@@ -422,6 +422,8 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 		}
 		vlmMs := time.Since(vlmStart).Milliseconds()
 		slog.Info("pipeline: VLM generation complete", "video_id", v.ID.String(), "duration_ms", vlmMs)
+	} else {
+		slog.Info("pipeline: VLM generation skipped (disabled)", "video_id", v.ID.String())
 	}
 
 	totalMs := time.Since(pipelineStart).Milliseconds()

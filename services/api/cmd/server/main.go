@@ -103,26 +103,33 @@ func main() {
 	eventService := video_event.NewServiceWithThreshold(eventRepo, trackRepo, videoSegmentRepo, detectionRepo, cfg.EventMovementThreshold)
 
 	segmentDescRepo := segment_description.NewRepository(db.DB)
-	visionScriptPath := filepath.Join("workers", "vision", "describe.py")
-	if _, err := os.Stat(visionScriptPath); err != nil {
-		if abs, err2 := filepath.Abs(visionScriptPath); err2 == nil {
-			if _, err3 := os.Stat(abs); err3 == nil {
+	var segmentDescService *segment_description.Service
+	var describer vision.VisionDescriber
+	if cfg.EnableVideoDescription {
+		visionScriptPath := filepath.Join("workers", "vision", "describe.py")
+		if _, err := os.Stat(visionScriptPath); err != nil {
+			if abs, err2 := filepath.Abs(visionScriptPath); err2 == nil {
+				if _, err3 := os.Stat(abs); err3 == nil {
+					visionScriptPath = abs
+				}
+			}
+			if _, err := os.Stat(visionScriptPath); err != nil {
+				alt := "/home/berzz/recall/workers/vision/describe.py"
+				if _, err2 := os.Stat(alt); err2 == nil {
+					visionScriptPath = alt
+				}
+			}
+		} else {
+			if abs, err := filepath.Abs(visionScriptPath); err == nil {
 				visionScriptPath = abs
 			}
 		}
-		if _, err := os.Stat(visionScriptPath); err != nil {
-			alt := "/home/berzz/recall/workers/vision/describe.py"
-			if _, err2 := os.Stat(alt); err2 == nil {
-				visionScriptPath = alt
-			}
-		}
+		describer = vision.NewSmolVLMDescriber(cfg.VisionPythonPath, visionScriptPath, cfg.VisionModel, cfg.VisionModelVersion, cfg.VisionMaxFrames, store, cfg.VisionTimeout)
+		segmentDescService = segment_description.NewService(segmentDescRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, describer, cfg.VisionModel, cfg.VisionModelVersion)
+		slog.Info("video description pipeline enabled", "model", cfg.VisionModel, "version", cfg.VisionModelVersion, "max_frames", cfg.VisionMaxFrames)
 	} else {
-		if abs, err := filepath.Abs(visionScriptPath); err == nil {
-			visionScriptPath = abs
-		}
+		slog.Info("video description pipeline disabled via ENABLE_VIDEO_DESCRIPTION=false — VLM generation will be skipped")
 	}
-	describer := vision.NewSmolVLMDescriber(cfg.VisionPythonPath, visionScriptPath, cfg.VisionModel, cfg.VisionModelVersion, cfg.VisionMaxFrames, store, cfg.VisionTimeout)
-	segmentDescService := segment_description.NewService(segmentDescRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, describer, cfg.VisionModel, cfg.VisionModelVersion)
 
 	localSourceRepo := local_source.NewRepository(db.DB)
 	localSourceService := local_source.NewService(localSourceRepo, videoService, cfg.StabilityDuration)

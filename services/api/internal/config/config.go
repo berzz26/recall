@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -37,6 +38,7 @@ type Config struct {
 	VisionModelVersion     string
 	VisionMaxFrames        int
 	VisionTimeout          time.Duration
+	EnableVideoDescription bool
 	TrackerType            string
 	TrackerHighThreshold   float64
 	TrackerLowThreshold    float64
@@ -216,6 +218,22 @@ func Load() Config {
 		}
 	}
 
+	enableVideoDescription := true
+	// Primary toggle: ENABLE_VIDEO_DESCRIPTION, aliases: ENABLE_VLM, VISION_ENABLED, ENABLE_DESCRIPTION
+	for _, key := range []string{"ENABLE_VIDEO_DESCRIPTION", "ENABLE_VLM", "VISION_ENABLED", "ENABLE_DESCRIPTION"} {
+		if v := os.Getenv(key); v != "" {
+			switch v2 := strings.ToLower(strings.TrimSpace(v)); v2 {
+			case "1", "true", "yes", "y", "on", "enable", "enabled":
+				enableVideoDescription = true
+			case "0", "false", "no", "n", "off", "disable", "disabled":
+				enableVideoDescription = false
+			default:
+				panic(fmt.Sprintf("invalid %s %q: must be boolean (true/false, 1/0, yes/no, on/off)", key, v))
+			}
+			break
+		}
+	}
+
 	trackerType := os.Getenv("TRACKER_TYPE")
 	if trackerType == "" {
 		trackerType = "iou"
@@ -268,37 +286,38 @@ func Load() Config {
 	}
 
 	return Config{
-		Env:                    env,
-		Port:                   port,
-		Addr:                   ":" + port,
-		DatabaseURL:            dbURL,
-		StorageRoot:            storageRoot,
-		MaxUploadSize:          maxUploadSize,
-		StabilitySeconds:       stabilitySeconds,
-		StabilityDuration:      time.Duration(stabilitySeconds) * time.Second,
-		PollInterval:           pollInterval,
-		FFprobePath:            ffprobePath,
-		FFprobeTimeout:         ffprobeTimeout,
-		SegmentDuration:        segmentDuration,
-		FrameSampleInterval:    frameSampleInterval,
-		FFmpegPath:             ffmpegPath,
-		FFmpegTimeout:          ffmpegTimeout,
-		FrameJPEGQuality:       frameJPEGQuality,
-		DetectionThreshold:     detectionThreshold,
-		DetectorName:           detectorName,
-		DetectorVersion:        detectorVersion,
-		ModelPath:              modelPath,
-		PythonPath:             pythonPath,
-		EventMovementThreshold: movementThreshold,
-		VisionPythonPath:       visionPythonPath,
-		VisionModel:            visionModel,
-		VisionModelVersion:     visionVersion,
-		VisionMaxFrames:        visionMaxFrames,
-		VisionTimeout:          visionTimeout,
-		TrackerType:            trackerType,
-		TrackerHighThreshold:   trackerHighThreshold,
-		TrackerLowThreshold:    trackerLowThreshold,
-		TrackerMatchThreshold:  trackerMatchThreshold,
-		TrackerTrackBuffer:     trackerTrackBuffer,
+		Env:                      env,
+		Port:                     port,
+		Addr:                     ":" + port,
+		DatabaseURL:              dbURL,
+		StorageRoot:              storageRoot,
+		MaxUploadSize:            maxUploadSize,
+		StabilitySeconds:         stabilitySeconds,
+		StabilityDuration:        time.Duration(stabilitySeconds) * time.Second,
+		PollInterval:             pollInterval,
+		FFprobePath:              ffprobePath,
+		FFprobeTimeout:           ffprobeTimeout,
+		SegmentDuration:          segmentDuration,
+		FrameSampleInterval:      frameSampleInterval,
+		FFmpegPath:               ffmpegPath,
+		FFmpegTimeout:            ffmpegTimeout,
+		FrameJPEGQuality:         frameJPEGQuality,
+		DetectionThreshold:       detectionThreshold,
+		DetectorName:             detectorName,
+		DetectorVersion:          detectorVersion,
+		ModelPath:                modelPath,
+		PythonPath:               pythonPath,
+		EventMovementThreshold:   movementThreshold,
+		VisionPythonPath:         visionPythonPath,
+		VisionModel:              visionModel,
+		VisionModelVersion:       visionVersion,
+		VisionMaxFrames:          visionMaxFrames,
+		VisionTimeout:            visionTimeout,
+		EnableVideoDescription:   enableVideoDescription,
+		TrackerType:              trackerType,
+		TrackerHighThreshold:     trackerHighThreshold,
+		TrackerLowThreshold:      trackerLowThreshold,
+		TrackerMatchThreshold:    trackerMatchThreshold,
+		TrackerTrackBuffer:       trackerTrackBuffer,
 	}
 }
