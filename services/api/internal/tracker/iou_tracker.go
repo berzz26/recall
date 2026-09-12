@@ -16,6 +16,9 @@ func NewIoUTracker() *IoUTracker {
 	return &IoUTracker{IouThreshold: 0.2, MaxGapSeconds: 5.0}
 }
 
+func (t *IoUTracker) Name() string    { return "iou" }
+func (t *IoUTracker) Version() string { return "1" }
+
 func iou(a, b DetectionInput) float64 {
 	ax1, ay1 := a.BBoxX, a.BBoxY
 	ax2, ay2 := a.BBoxX+a.BBoxWidth, a.BBoxY+a.BBoxHeight

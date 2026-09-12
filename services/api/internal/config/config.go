@@ -10,33 +10,38 @@ import (
 )
 
 type Config struct {
-	Env                 string
-	Port                string
-	Addr                string
-	DatabaseURL         string
-	StorageRoot         string
-	MaxUploadSize       int64
-	StabilitySeconds    int
-	StabilityDuration   time.Duration
-	PollInterval        time.Duration
-	FFprobePath         string
-	FFprobeTimeout      time.Duration
-	SegmentDuration     time.Duration
-	FrameSampleInterval time.Duration
-	FFmpegPath          string
-	FFmpegTimeout       time.Duration
-	FrameJPEGQuality    int
-	DetectionThreshold  float64
-	DetectorName        string
-	DetectorVersion     string
-	ModelPath           string
-	PythonPath          string
+	Env                    string
+	Port                   string
+	Addr                   string
+	DatabaseURL            string
+	StorageRoot            string
+	MaxUploadSize          int64
+	StabilitySeconds       int
+	StabilityDuration      time.Duration
+	PollInterval           time.Duration
+	FFprobePath            string
+	FFprobeTimeout         time.Duration
+	SegmentDuration        time.Duration
+	FrameSampleInterval    time.Duration
+	FFmpegPath             string
+	FFmpegTimeout          time.Duration
+	FrameJPEGQuality       int
+	DetectionThreshold     float64
+	DetectorName           string
+	DetectorVersion        string
+	ModelPath              string
+	PythonPath             string
 	EventMovementThreshold float64
-	VisionPythonPath    string
-	VisionModel         string
-	VisionModelVersion  string
-	VisionMaxFrames     int
-	VisionTimeout       time.Duration
+	VisionPythonPath       string
+	VisionModel            string
+	VisionModelVersion     string
+	VisionMaxFrames        int
+	VisionTimeout          time.Duration
+	TrackerType            string
+	TrackerHighThreshold   float64
+	TrackerLowThreshold    float64
+	TrackerMatchThreshold  float64
+	TrackerTrackBuffer     int
 }
 
 func Load() Config {
@@ -188,13 +193,13 @@ func Load() Config {
 	}
 	visionModel := os.Getenv("VISION_MODEL")
 	if visionModel == "" {
-		visionModel = "Qwen/Qwen3-VL-2B-Instruct"
+		visionModel = "HuggingFaceTB/SmolVLM-500M-Instruct"
 	}
 	visionVersion := os.Getenv("VISION_MODEL_VERSION")
 	if visionVersion == "" {
-		visionVersion = "2B-Instruct"
+		visionVersion = "500M-Instruct"
 	}
-	visionMaxFrames := 6
+	visionMaxFrames := 3
 	if v := os.Getenv("VISION_MAX_FRAMES"); v != "" {
 		parsed, err := strconv.Atoi(v)
 		if err != nil || parsed < 1 {
@@ -211,33 +216,89 @@ func Load() Config {
 		}
 	}
 
+	trackerType := os.Getenv("TRACKER_TYPE")
+	if trackerType == "" {
+		trackerType = "iou"
+	}
+	if trackerType != "iou" && trackerType != "bytetrack" {
+		panic(fmt.Sprintf("invalid TRACKER_TYPE %q: must be one of [iou, bytetrack]", trackerType))
+	}
+
+	trackerHighThreshold := 0.6
+	if v := os.Getenv("TRACKER_HIGH_THRESHOLD"); v != "" {
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			panic(fmt.Sprintf("invalid TRACKER_HIGH_THRESHOLD %q: %v", v, err))
+		}
+		trackerHighThreshold = parsed
+	}
+	trackerLowThreshold := 0.1
+	if v := os.Getenv("TRACKER_LOW_THRESHOLD"); v != "" {
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			panic(fmt.Sprintf("invalid TRACKER_LOW_THRESHOLD %q: %v", v, err))
+		}
+		trackerLowThreshold = parsed
+	}
+	trackerMatchThreshold := 0.8
+	if v := os.Getenv("TRACKER_MATCH_THRESHOLD"); v != "" {
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			panic(fmt.Sprintf("invalid TRACKER_MATCH_THRESHOLD %q: %v", v, err))
+		}
+		trackerMatchThreshold = parsed
+	}
+	trackerTrackBuffer := 30
+	if v := os.Getenv("TRACKER_TRACK_BUFFER"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			panic(fmt.Sprintf("invalid TRACKER_TRACK_BUFFER %q: %v", v, err))
+		}
+		trackerTrackBuffer = parsed
+	}
+
+	if !(0 <= trackerLowThreshold && trackerLowThreshold < trackerHighThreshold && trackerHighThreshold <= 1) {
+		panic(fmt.Sprintf("invalid tracker thresholds: must satisfy 0 <= TRACKER_LOW_THRESHOLD (%.4f) < TRACKER_HIGH_THRESHOLD (%.4f) <= 1", trackerLowThreshold, trackerHighThreshold))
+	}
+	if !(0 < trackerMatchThreshold && trackerMatchThreshold <= 1) {
+		panic(fmt.Sprintf("invalid TRACKER_MATCH_THRESHOLD %.4f: must satisfy 0 < TRACKER_MATCH_THRESHOLD <= 1", trackerMatchThreshold))
+	}
+	if trackerTrackBuffer < 1 {
+		panic(fmt.Sprintf("invalid TRACKER_TRACK_BUFFER %d: must be >= 1", trackerTrackBuffer))
+	}
+
 	return Config{
-		Env:               env,
-		Port:              port,
-		Addr:              ":" + port,
-		DatabaseURL:       dbURL,
-		StorageRoot:       storageRoot,
-		MaxUploadSize:     maxUploadSize,
-		StabilitySeconds:  stabilitySeconds,
-		StabilityDuration: time.Duration(stabilitySeconds) * time.Second,
-		PollInterval:        pollInterval,
-		FFprobePath:         ffprobePath,
-		FFprobeTimeout:      ffprobeTimeout,
-		SegmentDuration:     segmentDuration,
-		FrameSampleInterval: frameSampleInterval,
-		FFmpegPath:          ffmpegPath,
-		FFmpegTimeout:       ffmpegTimeout,
-		FrameJPEGQuality:    frameJPEGQuality,
-		DetectionThreshold:  detectionThreshold,
-		DetectorName:        detectorName,
-		DetectorVersion:     detectorVersion,
-		ModelPath:           modelPath,
-		PythonPath:          pythonPath,
+		Env:                    env,
+		Port:                   port,
+		Addr:                   ":" + port,
+		DatabaseURL:            dbURL,
+		StorageRoot:            storageRoot,
+		MaxUploadSize:          maxUploadSize,
+		StabilitySeconds:       stabilitySeconds,
+		StabilityDuration:      time.Duration(stabilitySeconds) * time.Second,
+		PollInterval:           pollInterval,
+		FFprobePath:            ffprobePath,
+		FFprobeTimeout:         ffprobeTimeout,
+		SegmentDuration:        segmentDuration,
+		FrameSampleInterval:    frameSampleInterval,
+		FFmpegPath:             ffmpegPath,
+		FFmpegTimeout:          ffmpegTimeout,
+		FrameJPEGQuality:       frameJPEGQuality,
+		DetectionThreshold:     detectionThreshold,
+		DetectorName:           detectorName,
+		DetectorVersion:        detectorVersion,
+		ModelPath:              modelPath,
+		PythonPath:             pythonPath,
 		EventMovementThreshold: movementThreshold,
-		VisionPythonPath:    visionPythonPath,
-		VisionModel:         visionModel,
-		VisionModelVersion:  visionVersion,
-		VisionMaxFrames:     visionMaxFrames,
-		VisionTimeout:       visionTimeout,
+		VisionPythonPath:       visionPythonPath,
+		VisionModel:            visionModel,
+		VisionModelVersion:     visionVersion,
+		VisionMaxFrames:        visionMaxFrames,
+		VisionTimeout:          visionTimeout,
+		TrackerType:            trackerType,
+		TrackerHighThreshold:   trackerHighThreshold,
+		TrackerLowThreshold:    trackerLowThreshold,
+		TrackerMatchThreshold:  trackerMatchThreshold,
+		TrackerTrackBuffer:     trackerTrackBuffer,
 	}
 }

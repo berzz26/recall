@@ -16,11 +16,11 @@ import (
 )
 
 const (
-	QwenModelName    = "Qwen/Qwen3-VL-2B-Instruct"
-	QwenModelVersion = "2B-Instruct"
+	SmolVLMModelName    = "HuggingFaceTB/SmolVLM-500M-Instruct"
+	SmolVLMModelVersion = "500M-Instruct"
 )
 
-type QwenDescriber struct {
+type SmolVLMDescriber struct {
 	pythonPath   string
 	scriptPath   string
 	modelName    string
@@ -30,23 +30,23 @@ type QwenDescriber struct {
 	store        storage.Storage
 }
 
-func NewQwenDescriber(pythonPath, scriptPath, modelName, modelVersion string, maxFrames int, store storage.Storage, timeout time.Duration) *QwenDescriber {
+func NewSmolVLMDescriber(pythonPath, scriptPath, modelName, modelVersion string, maxFrames int, store storage.Storage, timeout time.Duration) *SmolVLMDescriber {
 	if pythonPath == "" {
 		pythonPath = "python3"
 	}
 	if modelName == "" {
-		modelName = QwenModelName
+		modelName = SmolVLMModelName
 	}
 	if modelVersion == "" {
-		modelVersion = QwenModelVersion
+		modelVersion = SmolVLMModelVersion
 	}
 	if maxFrames < 1 {
-		maxFrames = 6
+		maxFrames = 3
 	}
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
 	}
-	return &QwenDescriber{
+	return &SmolVLMDescriber{
 		pythonPath:   pythonPath,
 		scriptPath:   scriptPath,
 		modelName:    modelName,
@@ -66,14 +66,8 @@ func selectFrames(frames []FrameInput, max int) []FrameInput {
 	if len(ordered) <= max {
 		return ordered
 	}
-	// Evenly distributed indices from first through last, always including both ends.
-	// e.g. 11 frames, 6 slots -> 0,2,4,6,8,10
-	var out []FrameInput
-	for i := 0; i < max; i++ {
-		idx := (i * (len(ordered) - 1)) / (max - 1)
-		out = append(out, ordered[idx])
-	}
-	return out
+	mid := (len(ordered) - 1) / 2
+	return []FrameInput{ordered[0], ordered[mid], ordered[len(ordered)-1]}
 }
 
 func clamp(v, lo, hi float64) float64 {
@@ -138,7 +132,7 @@ type qwenOutput struct {
 	Descriptions []qwenDescription `json:"descriptions"`
 }
 
-func (q *QwenDescriber) DescribeVideo(ctx context.Context, input VideoDescriptionInput) ([]DescriptionResult, error) {
+func (q *SmolVLMDescriber) DescribeVideo(ctx context.Context, input VideoDescriptionInput) ([]DescriptionResult, error) {
 	if len(input.Segments) == 0 {
 		return nil, nil
 	}
@@ -281,9 +275,9 @@ func (q *QwenDescriber) DescribeVideo(ctx context.Context, input VideoDescriptio
 			msg = msg[:800]
 		}
 		if timeoutCtx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("qwen vision timeout: %w", timeoutCtx.Err())
+			return nil, fmt.Errorf("smolvlm vision timeout: %w", timeoutCtx.Err())
 		}
-		return nil, fmt.Errorf("qwen vision failed: %s: %w", msg, err)
+		return nil, fmt.Errorf("smolvlm vision failed: %s: %w", msg, err)
 	}
 
 	outData, err := os.ReadFile(outputPath)

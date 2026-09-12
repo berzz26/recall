@@ -38,7 +38,7 @@ export default function VideoDetail() {
           try {
             const links: any[] = await client.get<any[]>(`/api/v1/tracks/${tr.id}/detections`)
             links.forEach((l: any) => { map[l.detection_id] = tr.track_index })
-          } catch {}
+          } catch { }
         }))
         setDetToTrack(map)
       } catch { setTracks([]); setDetToTrack({}) }
@@ -257,7 +257,11 @@ export default function VideoDetail() {
                   const ss = Math.floor(s % 60)
                   return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
                 }
-                const timeLabel = seg ? `${fmtTime(seg.start_time)} → ${fmtTime(seg.end_time)}` : d.segment_id.slice(0, 8)
+                const timeLabel = seg
+                  ? `${fmtTime(seg.start_time)} → ${fmtTime(seg.end_time)}`
+                  : d.segment_id
+                    ? d.segment_id.slice(0, 8)
+                    : 'Unknown segment'
                 return (
                   <div key={d.id} style={{ padding: 12, background: '#0f1115', border: '1px solid #2a2e39', borderRadius: 6, cursor: seg ? 'pointer' : 'default' }} onClick={() => {
                     if (!seg) return
@@ -293,38 +297,38 @@ export default function VideoDetail() {
               return dets.some(d => detToTrack[d.id] === selectedTrack)
             })
             .map(f => {
-            const dets = detectionsByFrame[f.id] || []
-            return (
-              <div key={f.id} className="frame-card" onClick={() => setSelectedFrame(f)} style={{ cursor: 'pointer', opacity: selectedTrack !== 'all' && !dets.some(d => detToTrack[d.id] === selectedTrack) ? 0.6 : 1 }}>
-                <div className="img-wrap">
-                  <img src={imgSrc(f)} alt={`frame ${f.frame_index}`} loading="lazy" />
-                  {dets.map(d => {
-                    const trackIdx = detToTrack[d.id]
-                    const highlighted = selectedTrack !== 'all' && trackIdx === selectedTrack
-                    const dimmed = selectedTrack !== 'all' && trackIdx !== selectedTrack
-                    return (
-                      <div key={d.id} className="bbox" style={{
-                        left: `${d.bbox_x * 100}%`,
-                        top: `${d.bbox_y * 100}%`,
-                        width: `${d.bbox_width * 100}%`,
-                        height: `${d.bbox_height * 100}%`,
-                        borderColor: highlighted ? '#22c55e' : undefined,
-                        background: highlighted ? 'rgba(34,197,94,0.18)' : dimmed ? 'rgba(250,204,21,0.06)' : undefined,
-                        opacity: dimmed ? 0.4 : 1,
-                      }}>
-                        <span className="bbox-label" style={highlighted ? { background: '#22c55e' } : undefined}>{d.label} {(d.confidence * 100).toFixed(0)}%{trackIdx !== undefined ? ` T${trackIdx}` : ''}</span>
-                      </div>
-                    )
-                  })}
+              const dets = detectionsByFrame[f.id] || []
+              return (
+                <div key={f.id} className="frame-card" onClick={() => setSelectedFrame(f)} style={{ cursor: 'pointer', opacity: selectedTrack !== 'all' && !dets.some(d => detToTrack[d.id] === selectedTrack) ? 0.6 : 1 }}>
+                  <div className="img-wrap">
+                    <img src={imgSrc(f)} alt={`frame ${f.frame_index}`} loading="lazy" />
+                    {dets.map(d => {
+                      const trackIdx = detToTrack[d.id]
+                      const highlighted = selectedTrack !== 'all' && trackIdx === selectedTrack
+                      const dimmed = selectedTrack !== 'all' && trackIdx !== selectedTrack
+                      return (
+                        <div key={d.id} className="bbox" style={{
+                          left: `${d.bbox_x * 100}%`,
+                          top: `${d.bbox_y * 100}%`,
+                          width: `${d.bbox_width * 100}%`,
+                          height: `${d.bbox_height * 100}%`,
+                          borderColor: highlighted ? '#22c55e' : undefined,
+                          background: highlighted ? 'rgba(34,197,94,0.18)' : dimmed ? 'rgba(250,204,21,0.06)' : undefined,
+                          opacity: dimmed ? 0.4 : 1,
+                        }}>
+                          <span className="bbox-label" style={highlighted ? { background: '#22c55e' } : undefined}>{d.label} {(d.confidence * 100).toFixed(0)}%{trackIdx !== undefined ? ` T${trackIdx}` : ''}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div className="meta">
+                    <div><b>Frame {String(f.frame_index).padStart(6, '0')}</b> {f.timestamp_seconds.toFixed(2)}s</div>
+                    <div>Segment {segments.find(s => s.id === f.segment_id)?.segment_index ?? '-'} · {f.width}×{f.height}</div>
+                    <div>{dets.length} detections {selectedTrack !== 'all' ? `(${dets.filter(d => detToTrack[d.id] === selectedTrack).length} in T${selectedTrack})` : ''}</div>
+                  </div>
                 </div>
-                <div className="meta">
-                  <div><b>Frame {String(f.frame_index).padStart(6, '0')}</b> {f.timestamp_seconds.toFixed(2)}s</div>
-                  <div>Segment {segments.find(s => s.id === f.segment_id)?.segment_index ?? '-'} · {f.width}×{f.height}</div>
-                  <div>{dets.length} detections {selectedTrack !== 'all' ? `(${dets.filter(d => detToTrack[d.id] === selectedTrack).length} in T${selectedTrack})` : ''}</div>
-                </div>
-              </div>
-            )
-          })}
+              )
+            })}
         </div>
         {frames.length === 0 && <div className="empty">No frames</div>}
       </div>

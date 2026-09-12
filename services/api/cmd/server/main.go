@@ -17,9 +17,10 @@ import (
 	"github.com/berzz26/recall/services/api/internal/health"
 	local_source "github.com/berzz26/recall/services/api/internal/local_source"
 	"github.com/berzz26/recall/services/api/internal/processing"
-	"github.com/berzz26/recall/services/api/internal/storage"
-	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/berzz26/recall/services/api/internal/segment_description"
+	"github.com/berzz26/recall/services/api/internal/storage"
+	"github.com/berzz26/recall/services/api/internal/tracker"
+	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/berzz26/recall/services/api/internal/video_event"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
@@ -90,7 +91,13 @@ func main() {
 	visualService := visual.NewService(detectionRepo, videoFrameRepo, store, yolo, cfg.DetectionThreshold, cfg.DetectorName, cfg.DetectorVersion)
 
 	trackRepo := video_track.NewRepository(db.DB)
-	trackService := video_track.NewServiceWithDeps(trackRepo, videoFrameRepo, detectionRepo, nil)
+	selectedTracker, err := tracker.New(cfg.TrackerType, cfg.TrackerHighThreshold, cfg.TrackerLowThreshold, cfg.TrackerMatchThreshold, cfg.TrackerTrackBuffer)
+	if err != nil {
+		slog.Error("failed to create tracker", "error", err, "tracker_type", cfg.TrackerType)
+		os.Exit(1)
+	}
+	slog.Info("tracker selected", "tracker_type", selectedTracker.Name(), "tracker_version", selectedTracker.Version())
+	trackService := video_track.NewServiceWithDeps(trackRepo, videoFrameRepo, detectionRepo, selectedTracker)
 
 	eventRepo := video_event.NewRepository(db.DB)
 	eventService := video_event.NewServiceWithThreshold(eventRepo, trackRepo, videoSegmentRepo, detectionRepo, cfg.EventMovementThreshold)
@@ -114,7 +121,7 @@ func main() {
 			visionScriptPath = abs
 		}
 	}
-	describer := vision.NewQwenDescriber(cfg.VisionPythonPath, visionScriptPath, cfg.VisionModel, cfg.VisionModelVersion, cfg.VisionMaxFrames, store, cfg.VisionTimeout)
+	describer := vision.NewSmolVLMDescriber(cfg.VisionPythonPath, visionScriptPath, cfg.VisionModel, cfg.VisionModelVersion, cfg.VisionMaxFrames, store, cfg.VisionTimeout)
 	segmentDescService := segment_description.NewService(segmentDescRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, describer, cfg.VisionModel, cfg.VisionModelVersion)
 
 	localSourceRepo := local_source.NewRepository(db.DB)

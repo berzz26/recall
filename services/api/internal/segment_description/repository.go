@@ -88,20 +88,18 @@ func (r *Repository) GetByVideoID(ctx context.Context, videoID uuid.UUID) ([]Des
 	}
 	return list, rows.Err()
 }
-
 type DescriptionWithTimes struct {
-	ID           uuid.UUID
-	VideoID      uuid.UUID
-	SegmentID    uuid.UUID
-	Description  string
-	ModelName    string
-	ModelVersion string
-	StartTime    float64
-	EndTime      float64
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+    ID           uuid.UUID `json:"id"`
+    VideoID      uuid.UUID `json:"video_id"`
+    SegmentID    uuid.UUID `json:"segment_id"`
+    Description  string    `json:"description"`
+    ModelName    string    `json:"model_name"`
+    ModelVersion string    `json:"model_version"`
+    StartTime    float64   `json:"start_time"`
+    EndTime      float64   `json:"end_time"`
+    CreatedAt    time.Time `json:"created_at"`
+    UpdatedAt    time.Time `json:"updated_at"`
 }
-
 func (r *Repository) GetByVideoIDWithSegments(ctx context.Context, videoID uuid.UUID) ([]DescriptionWithTimes, error) {
 	query := fmt.Sprintf(`
 		SELECT d.id, d.video_id, d.segment_id, d.description, d.model_name, d.model_version,

@@ -126,6 +126,12 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID, frame
 	}
 
 	// Build tracks and links
+	trackerName := "iou"
+	trackerVersion := "1"
+	if s.tracker != nil {
+		trackerName = s.tracker.Name()
+		trackerVersion = s.tracker.Version()
+	}
 	var tracks []Track
 	linksByIndex := make(map[int][]TrackDetection)
 	for idx, info := range trackGroups {
@@ -140,8 +146,8 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID, frame
 			TrackIndex: idx,
 			StartTimestamp: info.Start,
 			EndTimestamp: info.End,
-			TrackerName: "bytetrack-iou",
-			TrackerVersion: "1",
+			TrackerName: trackerName,
+			TrackerVersion: trackerVersion,
 		}
 		if t.StartTimestamp > t.EndTimestamp {
 			t.StartTimestamp = info.Dets[0].CreatedAt.Sub(info.Dets[0].CreatedAt).Seconds()
