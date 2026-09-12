@@ -3,7 +3,9 @@ package segment_description
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/berzz26/recall/services/api/internal/detection"
@@ -31,6 +33,7 @@ func NewService(repo *Repository, segRepo *video_segment.Repository, frameRepo *
 }
 
 func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID) ([]Description, error) {
+	svcStart := time.Now()
 	if s.describer == nil {
 		return nil, fmt.Errorf("vision describer not configured")
 	}
@@ -39,8 +42,10 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID) ([]De
 		return nil, err
 	}
 	if len(segments) == 0 {
+		slog.Info("segment_description: no segments, skipping VLM", "video_id", videoID.String(), "duration_ms", time.Since(svcStart).Milliseconds())
 		return s.repo.ReplaceForVideo(ctx, videoID, nil)
 	}
+	slog.Info("segment_description: start", "video_id", videoID.String(), "segments", len(segments))
 	frames, err := s.frameRepo.GetByVideoID(ctx, videoID)
 	if err != nil {
 		return nil, err
@@ -110,10 +115,15 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID) ([]De
 
 	// Invoke the VLM exactly once for the video. Descriptions must come
 	// from visual inspection; never synthesize from metadata here.
+	vlmStart := time.Now()
+	slog.Info("segment_description: VLM invoke start", "video_id", videoID.String(), "segments", len(segInputs))
 	results, err := s.describer.DescribeVideo(ctx, vision.VideoDescriptionInput{VideoID: videoID, Segments: segInputs})
+	vlmMs := time.Since(vlmStart).Milliseconds()
 	if err != nil {
+		slog.Error("segment_description: VLM failed", "video_id", videoID.String(), "duration_ms", vlmMs, "error", err)
 		return nil, err
 	}
+	slog.Info("segment_description: VLM complete", "video_id", videoID.String(), "segments", len(segInputs), "descriptions", len(results), "duration_ms", vlmMs)
 	if len(results) != len(segments) {
 		return nil, fmt.Errorf("vision returned %d descriptions for %d segments", len(results), len(segments))
 	}
@@ -157,7 +167,16 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID) ([]De
 		})
 	}
 
-	return s.repo.ReplaceForVideo(ctx, videoID, descs)
+	persistStart := time.Now()
+	result, err := s.repo.ReplaceForVideo(ctx, videoID, descs)
+	persistMs := time.Since(persistStart).Milliseconds()
+	totalMs := time.Since(svcStart).Milliseconds()
+	if err != nil {
+		slog.Error("segment_description: persist failed", "video_id", videoID.String(), "duration_ms", persistMs, "error", err)
+		return nil, err
+	}
+	slog.Info("segment_description: complete", "video_id", videoID.String(), "segments", len(segments), "descriptions", len(result), "vlm_ms", vlmMs, "persist_ms", persistMs, "total_duration_ms", totalMs)
+	return result, nil
 }
 
 func (s *Service) GetByVideoID(ctx context.Context, videoID uuid.UUID) ([]Description, error) {

@@ -3,7 +3,9 @@ package video_track
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/berzz26/recall/services/api/internal/detection"
@@ -33,13 +35,16 @@ func NewServiceWithDeps(repo *Repository, frameRepo *video_frame.Repository, det
 }
 
 func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID, frames []video_frame.VideoFrame, detections []detection.Detection) ([]Track, error) {
+	trackStart := time.Now()
 	if len(frames) == 0 {
 		// delete existing and return empty
 		if err := s.repo.DeleteByVideoID(ctx, videoID); err != nil {
 			return nil, err
 		}
+		slog.Info("tracking: no frames, skipped", "video_id", videoID.String(), "duration_ms", time.Since(trackStart).Milliseconds())
 		return []Track{}, nil
 	}
+	slog.Info("tracking: start", "video_id", videoID.String(), "frames", len(frames), "detections", len(detections), "tracker", func() string { if s.tracker != nil { return s.tracker.Name() }; return "iou" }())
 	// order frames by timestamp / frame_index
 	sort.Slice(frames, func(i, j int) bool {
 		if frames[i].TimestampSeconds == frames[j].TimestampSeconds {
@@ -75,14 +80,26 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID, frame
 		detsByFrame[d.FrameID] = append(detsByFrame[d.FrameID], di)
 	}
 
+	trackerStart := time.Now()
 	assignments, err := s.tracker.Track(ctx, frameInputs, detsByFrame)
+	trackerMs := time.Since(trackerStart).Milliseconds()
 	if err != nil {
+		slog.Error("tracking: tracker failed", "video_id", videoID.String(), "duration_ms", trackerMs, "error", err)
 		return nil, fmt.Errorf("tracker failed: %w", err)
 	}
+	slog.Info("tracking: association complete",
+		"video_id", videoID.String(),
+		"frames", len(frameInputs),
+		"detections", len(detections),
+		"assignments", len(assignments),
+		"tracker", trackerNameForLog(s.tracker),
+		"duration_ms", trackerMs,
+	)
 	if len(detections) == 0 {
 		if err := s.repo.DeleteByVideoID(ctx, videoID); err != nil {
 			return nil, err
 		}
+		slog.Info("tracking: no detections, cleared tracks", "video_id", videoID.String(), "duration_ms", time.Since(trackStart).Milliseconds())
 		return []Track{}, nil
 	}
 	// Group detections by trackIndex
@@ -171,10 +188,22 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID, frame
 	// Sort tracks by index for deterministic
 	sort.Slice(tracks, func(i, j int) bool { return tracks[i].TrackIndex < tracks[j].TrackIndex })
 
+	persistStart := time.Now()
 	saved, err := s.repo.ReplaceForVideo(ctx, videoID, tracks, linksByIndex)
+	persistMs := time.Since(persistStart).Milliseconds()
 	if err != nil {
+		slog.Error("tracking: persist failed", "video_id", videoID.String(), "duration_ms", persistMs, "error", err)
 		return nil, err
 	}
+	totalMs := time.Since(trackStart).Milliseconds()
+	slog.Info("tracking: complete",
+		"video_id", videoID.String(),
+		"tracks", len(saved),
+		"tracker", trackerNameForLog(s.tracker),
+		"tracker_ms", trackerMs,
+		"persist_ms", persistMs,
+		"total_duration_ms", totalMs,
+	)
 	return saved, nil
 }
 
@@ -191,6 +220,13 @@ func (s *Service) GenerateForVideoID(ctx context.Context, videoID uuid.UUID) ([]
 		return nil, err
 	}
 	return s.GenerateForVideo(ctx, videoID, frames, dets)
+}
+
+func trackerNameForLog(tr tracker.Tracker) string {
+	if tr == nil {
+		return "iou"
+	}
+	return tr.Name()
 }
 
 func (s *Service) GetByVideoID(ctx context.Context, videoID uuid.UUID) ([]Track, error) {

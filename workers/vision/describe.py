@@ -22,9 +22,12 @@ try:
 except Exception:
     pass
 
-MODEL_NAME = os.environ["VISION_MODEL"]
-MODEL_PATH = os.environ["VISION_MODEL_PATH"]
-MODEL_VERSION = os.environ["VISION_MODEL_VERSION"]
+MODEL_NAME = os.getenv("VISION_MODEL", "HuggingFaceTB/SmolVLM-500M-Instruct")
+MODEL_PATH = os.getenv("VISION_MODEL_PATH", os.getenv("VISION_MODEL", "/models/SmolVLM2-500M-Video-Instruct"))
+# Handle case where VISION_MODEL is model name not path
+if MODEL_PATH == MODEL_NAME and "/" not in MODEL_PATH:
+    MODEL_PATH = os.getenv("VISION_MODEL_PATH", "/models/SmolVLM2-500M-Video-Instruct")
+MODEL_VERSION = os.getenv("VISION_MODEL_VERSION", "500M-Instruct")
 
 
 INSTRUCTION = """You are describing a CCTV video segment for a video search system.
@@ -66,13 +69,38 @@ Rules:
 Return only the description."""
 
 
-def log(message):
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    print(
-        f"[{timestamp}] [VISION] {message}",
-        file=sys.stderr,
-        flush=True,
-    )
+def _log(level, msg, **fields):
+    """Production-grade structured JSON logger to stderr."""
+    # Auto-detect level from msg prefix if not explicitly set
+    if msg.startswith("ERROR:"):
+        level = "ERROR"
+    elif msg.startswith("WARNING:"):
+        level = "WARN"
+    record = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "level": level,
+        "component": "vision",
+        "msg": msg,
+    }
+    if fields:
+        # Ensure JSON serializable
+        for k, v in fields.items():
+            try:
+                json.dumps(v)
+                record[k] = v
+            except Exception:
+                record[k] = str(v)
+    print(json.dumps(record), file=sys.stderr, flush=True)
+
+
+def log(message, level="INFO", **fields):
+    """Backwards-compatible wrapper: log(message) -> INFO JSON."""
+    # Allow caller to pass level via message prefix
+    if isinstance(message, str) and message.startswith("ERROR:"):
+        level = "ERROR"
+    elif isinstance(message, str) and message.startswith("WARNING:"):
+        level = "WARN"
+    _log(level, message, **fields)
 
 
 def parse_args():
@@ -174,45 +202,41 @@ def log_gpu_state(torch):
     try:
         cuda_available = torch.cuda.is_available()
 
-        log(
-            f"CUDA available: {cuda_available}"
-        )
+        _log("INFO", f"CUDA available: {cuda_available}", cuda_available=cuda_available)
 
         if not cuda_available:
             return
 
         device_count = torch.cuda.device_count()
 
-        log(
-            f"CUDA device count: {device_count}"
-        )
+        _log("INFO", f"CUDA device count: {device_count}", device_count=device_count)
 
         for i in range(device_count):
             name = torch.cuda.get_device_name(i)
             props = torch.cuda.get_device_properties(i)
 
-            log(
-                f"GPU {i}: {name}"
-            )
+            _log("INFO", f"GPU {i}: {name}", gpu_index=i, gpu_name=name)
 
-            log(
-                f"GPU {i} total memory: "
-                f"{props.total_memory / (1024 ** 3):.2f} GB"
+            _log(
+                "INFO",
+                f"GPU {i} total memory: {props.total_memory / (1024 ** 3):.2f} GB",
+                gpu_index=i,
+                total_memory_gb=round(props.total_memory / (1024 ** 3), 2),
             )
 
             allocated = torch.cuda.memory_allocated(i)
             reserved = torch.cuda.memory_reserved(i)
 
-            log(
-                f"GPU {i} memory: "
-                f"{allocated / (1024 ** 3):.2f} GB allocated, "
-                f"{reserved / (1024 ** 3):.2f} GB reserved"
+            _log(
+                "INFO",
+                f"GPU {i} memory: {allocated / (1024 ** 3):.2f} GB allocated, {reserved / (1024 ** 3):.2f} GB reserved",
+                gpu_index=i,
+                allocated_gb=round(allocated / (1024 ** 3), 2),
+                reserved_gb=round(reserved / (1024 ** 3), 2),
             )
 
     except Exception as e:
-        log(
-            f"Failed to inspect GPU state: {e}"
-        )
+        _log("WARN", f"Failed to inspect GPU state: {e}", error=str(e))
 
 
 def main():
@@ -224,56 +248,27 @@ def main():
         prefix="recall-vision-"
     )
 
-    log("========================================")
-    log(
-        "SmolVLM2-500M-Video-Instruct "
-        "vision worker starting"
-    )
-    log("========================================")
+    _log("INFO", "========================================")
+    _log("INFO", "SmolVLM2-500M-Video-Instruct vision worker starting", model_name=MODEL_NAME, model_path=MODEL_PATH, model_version=MODEL_VERSION)
+    _log("INFO", "========================================")
 
-    log(
-        f"Python executable: {sys.executable}"
-    )
-
-    log(
-        f"Python version: {sys.version.split()[0]}"
-    )
-
-    log(
-        f"Working directory: {os.getcwd()}"
-    )
-
-    log(
-        f"Input: {args.input}"
-    )
-
-    log(
-        f"Output: {args.output}"
-    )
-
-    log(
-        f"Model name: {MODEL_NAME}"
-    )
-
-    log(
-        f"Model path: {MODEL_PATH}"
-    )
-
-    log(
-        f"Model version: {MODEL_VERSION}"
-    )
+    _log("INFO", f"Python executable: {sys.executable}", python_executable=sys.executable)
+    _log("INFO", f"Python version: {sys.version.split()[0]}", python_version=sys.version.split()[0])
+    _log("INFO", f"Working directory: {os.getcwd()}", cwd=os.getcwd())
+    _log("INFO", f"Input: {args.input}", input_path=args.input)
+    _log("INFO", f"Output: {args.output}", output_path=args.output)
+    _log("INFO", f"Model name: {MODEL_NAME}", model_name=MODEL_NAME)
+    _log("INFO", f"Model path: {MODEL_PATH}", model_path=MODEL_PATH)
+    _log("INFO", f"Model version: {MODEL_VERSION}", model_version=MODEL_VERSION)
 
     # ------------------------------------------------------------
     # Check model directory
     # ------------------------------------------------------------
 
-    log("Checking model directory...")
+    _log("INFO", "Checking model directory...", model_path=MODEL_PATH)
 
     if not os.path.exists(MODEL_PATH):
-        log(
-            f"ERROR: model directory does not exist: "
-            f"{MODEL_PATH}"
-        )
+        _log("ERROR", f"model directory does not exist: {MODEL_PATH}", model_path=MODEL_PATH)
 
         shutil.rmtree(
             tmp_root,
@@ -283,10 +278,7 @@ def main():
         return 3
 
     if not os.path.isdir(MODEL_PATH):
-        log(
-            f"ERROR: model path is not a directory: "
-            f"{MODEL_PATH}"
-        )
+        _log("ERROR", f"model path is not a directory: {MODEL_PATH}", model_path=MODEL_PATH)
 
         shutil.rmtree(
             tmp_root,
@@ -298,35 +290,27 @@ def main():
     try:
         model_files = os.listdir(MODEL_PATH)
 
-        log(
-            f"Model directory exists: "
-            f"{len(model_files)} entries"
-        )
+        _log("INFO", f"Model directory exists: {len(model_files)} entries", file_count=len(model_files), model_path=MODEL_PATH)
 
         for filename in model_files[:20]:
-            log(
-                f"Model file: {filename}"
-            )
+            _log("DEBUG", f"Model file: {filename}", filename=filename)
 
     except Exception as e:
-        log(
-            f"WARNING: failed to inspect model directory: {e}"
-        )
+        _log("WARN", f"failed to inspect model directory: {e}", error=str(e))
 
     # ------------------------------------------------------------
     # Read input
     # ------------------------------------------------------------
 
-    log("Reading input JSON...")
+    _log("INFO", "Reading input JSON...", input_path=args.input)
+    read_start = time.time()
 
     try:
         with open(args.input) as f:
             data = json.load(f)
 
     except Exception as e:
-        log(
-            f"ERROR: failed to read input: {e}"
-        )
+        _log("ERROR", f"failed to read input: {e}", error=str(e), input_path=args.input)
 
         shutil.rmtree(
             tmp_root,
@@ -335,13 +319,12 @@ def main():
 
         return 2
 
+    read_ms = (time.time() - read_start) * 1000
     video_id = data.get("video_id", "")
     segments = data.get("segments", [])
 
     if not video_id or not isinstance(segments, list):
-        log(
-            "ERROR: video_id and segments are required"
-        )
+        _log("ERROR", "video_id and segments are required", video_id=video_id)
 
         shutil.rmtree(
             tmp_root,
@@ -350,29 +333,23 @@ def main():
 
         return 2
 
-    log(
-        f"Video ID: {video_id}"
-    )
-
-    log(
-        f"Segments: {len(segments)}"
-    )
+    _log("INFO", f"Video ID: {video_id}", video_id=video_id, duration_ms=round(read_ms, 2))
+    _log("INFO", f"Segments: {len(segments)}", segment_count=len(segments), input_read_ms=round(read_ms, 2))
 
     # ------------------------------------------------------------
     # PIL
     # ------------------------------------------------------------
 
-    log("Importing PIL...")
+    _log("INFO", "Importing PIL...")
+    pil_start = time.time()
 
     try:
         from PIL import Image
 
-        log("PIL import OK")
+        _log("INFO", "PIL import OK", duration_ms=round((time.time() - pil_start) * 1000, 2))
 
     except Exception as e:
-        log(
-            f"ERROR: PIL import failed: {e}"
-        )
+        _log("ERROR", f"PIL import failed: {e}", error=str(e), duration_ms=round((time.time() - pil_start) * 1000, 2))
 
         shutil.rmtree(
             tmp_root,
@@ -385,21 +362,18 @@ def main():
     # Torch
     # ------------------------------------------------------------
 
-    log("Importing torch...")
+    _log("INFO", "Importing torch...")
+    torch_start = time.time()
 
     try:
         import torch
 
-        log(
-            f"Torch import OK: {torch.__version__}"
-        )
+        _log("INFO", f"Torch import OK: {torch.__version__}", torch_version=torch.__version__, duration_ms=round((time.time() - torch_start) * 1000, 2))
 
         log_gpu_state(torch)
 
     except Exception as e:
-        log(
-            f"ERROR: torch import failed: {e}"
-        )
+        _log("ERROR", f"torch import failed: {e}", error=str(e), duration_ms=round((time.time() - torch_start) * 1000, 2))
 
         shutil.rmtree(
             tmp_root,
@@ -412,33 +386,24 @@ def main():
     # Transformers
     # ------------------------------------------------------------
 
-    log("Importing transformers...")
+    _log("INFO", "Importing transformers...")
+    tf_start = time.time()
 
     try:
         import transformers
 
-        log(
-            f"Transformers import OK: "
-            f"{transformers.__version__}"
-        )
+        _log("INFO", f"Transformers import OK: {transformers.__version__}", transformers_version=transformers.__version__, duration_ms=round((time.time() - tf_start) * 1000, 2))
 
         from transformers import (
             AutoProcessor,
             AutoModelForImageTextToText,
         )
 
-        log(
-            "AutoProcessor import OK"
-        )
-
-        log(
-            "AutoModelForImageTextToText import OK"
-        )
+        _log("DEBUG", "AutoProcessor import OK")
+        _log("DEBUG", "AutoModelForImageTextToText import OK")
 
     except Exception as e:
-        log(
-            f"ERROR: transformers import failed: {e}"
-        )
+        _log("ERROR", f"transformers import failed: {e}", error=str(e), duration_ms=round((time.time() - tf_start) * 1000, 2))
 
         shutil.rmtree(
             tmp_root,
@@ -451,16 +416,14 @@ def main():
     # Model load
     # ------------------------------------------------------------
 
-    log("========================================")
-    log("STARTING MODEL LOAD")
-    log("========================================")
+    _log("INFO", "========================================")
+    _log("INFO", "STARTING MODEL LOAD", model_path=MODEL_PATH)
+    _log("INFO", "========================================")
 
     model_start = time.time()
 
     try:
-        log(
-            f"Loading processor from: {MODEL_PATH}"
-        )
+        _log("INFO", f"Loading processor from: {MODEL_PATH}", model_path=MODEL_PATH)
 
         processor_start = time.time()
 
@@ -468,42 +431,28 @@ def main():
             MODEL_PATH
         )
 
-        log(
-            f"Processor loaded in "
-            f"{time.time() - processor_start:.2f}s"
-        )
+        proc_ms = (time.time() - processor_start) * 1000
+        _log("INFO", f"Processor loaded in {proc_ms/1000:.2f}s", duration_ms=round(proc_ms, 2), model_path=MODEL_PATH)
 
-        log(
-            f"Loading model from: {MODEL_PATH}"
-        )
+        _log("INFO", f"Loading model from: {MODEL_PATH}", model_path=MODEL_PATH)
+        _log("INFO", "Using CPU float32 inference", dtype="float32", device="cpu")
 
-        log(
-            "Using CPU float32 inference"
-        )
-
+        model_load_start = time.time()
         model = AutoModelForImageTextToText.from_pretrained(
             MODEL_PATH,
             torch_dtype=torch.float32,
         )
 
         model.eval()
+        model_ms = (time.time() - model_load_start) * 1000
+        total_model_ms = (time.time() - model_start) * 1000
 
-        log(
-            f"MODEL LOAD COMPLETE in "
-            f"{time.time() - model_start:.2f}s"
-        )
-
-        log(
-            f"Model device: "
-            f"{getattr(model, 'device', 'unknown')}"
-        )
-
+        _log("INFO", f"MODEL LOAD COMPLETE in {total_model_ms/1000:.2f}s", duration_ms=round(total_model_ms, 2), processor_ms=round(proc_ms, 2), model_ms=round(model_ms, 2))
+        _log("INFO", f"Model device: {getattr(model, 'device', 'unknown')}", model_device=str(getattr(model, 'device', 'unknown')))
         log_gpu_state(torch)
 
     except Exception as e:
-        log(
-            f"ERROR: failed to load model: {e}"
-        )
+        _log("ERROR", f"failed to load model: {e}", error=str(e), duration_ms=round((time.time() - model_start) * 1000, 2))
 
         shutil.rmtree(
             tmp_root,
@@ -512,9 +461,9 @@ def main():
 
         return 3
 
-    log("========================================")
-    log("MODEL READY")
-    log("========================================")
+    _log("INFO", "========================================")
+    _log("INFO", "MODEL READY", total_duration_ms=round((time.time() - model_start) * 1000, 2))
+    _log("INFO", "========================================")
 
     descriptions = []
 
@@ -522,6 +471,7 @@ def main():
     # Segments
     # ------------------------------------------------------------
 
+    vlm_total_start = time.time()
     try:
         for segment_index, seg in enumerate(
             segments,
@@ -539,25 +489,13 @@ def main():
                 [],
             ) or []
 
-            log("----------------------------------------")
-            log(
-                f"Segment "
-                f"{segment_index}/{len(segments)}"
-            )
-
-            log(
-                f"Segment ID: {segment_id}"
-            )
-
-            log(
-                f"Frame count: {len(frames)}"
-            )
+            _log("INFO", "----------------------------------------")
+            _log("INFO", f"Segment {segment_index}/{len(segments)}", segment_index=segment_index, total_segments=len(segments), segment_id=segment_id)
+            _log("INFO", f"Segment ID: {segment_id}", segment_id=segment_id)
+            _log("INFO", f"Frame count: {len(frames)}", segment_id=segment_id, frame_count=len(frames))
 
             if not segment_id or not frames:
-                log(
-                    "ERROR: invalid segment: "
-                    "id and frames required"
-                )
+                _log("ERROR", "invalid segment: id and frames required", segment_id=segment_id, segment_index=segment_index)
 
                 shutil.rmtree(
                     tmp_root,
@@ -571,6 +509,7 @@ def main():
             # ----------------------------------------------------
 
             images = []
+            frame_load_total_ms = 0
 
             for frame_index, fr in enumerate(
                 frames,
@@ -582,10 +521,7 @@ def main():
                 )
 
                 if not path:
-                    log(
-                        f"ERROR: frame "
-                        f"{frame_index} missing path"
-                    )
+                    _log("ERROR", f"frame {frame_index} missing path", segment_id=segment_id, frame_index=frame_index)
 
                     shutil.rmtree(
                         tmp_root,
@@ -594,11 +530,7 @@ def main():
 
                     return 2
 
-                log(
-                    f"Loading frame "
-                    f"{frame_index}/{len(frames)}: "
-                    f"{path}"
-                )
+                _log("DEBUG", f"Loading frame {frame_index}/{len(frames)}: {path}", segment_id=segment_id, frame_index=frame_index, path=path)
 
                 frame_start = time.time()
 
@@ -607,18 +539,20 @@ def main():
                         path
                     ).convert("RGB")
 
-                    log(
-                        f"Frame loaded: "
-                        f"{img.width}x{img.height} "
-                        f"in "
-                        f"{time.time() - frame_start:.3f}s"
+                    frame_ms = (time.time() - frame_start) * 1000
+                    frame_load_total_ms += frame_ms
+                    _log(
+                        "INFO",
+                        f"Frame loaded: {img.width}x{img.height} in {frame_ms/1000:.3f}s",
+                        segment_id=segment_id,
+                        frame_index=frame_index,
+                        width=img.width,
+                        height=img.height,
+                        duration_ms=round(frame_ms, 2),
                     )
 
                 except Exception as e:
-                    log(
-                        f"ERROR: failed to open "
-                        f"frame {path}: {e}"
-                    )
+                    _log("ERROR", f"failed to open frame {path}: {e}", segment_id=segment_id, frame_index=frame_index, path=path, error=str(e))
 
                     shutil.rmtree(
                         tmp_root,
@@ -629,29 +563,22 @@ def main():
 
                 images.append(img)
 
-            log(
-                f"All {len(images)} frames loaded"
-            )
+            _log("INFO", f"All {len(images)} frames loaded", segment_id=segment_id, frame_count=len(images), total_frame_load_ms=round(frame_load_total_ms, 2))
 
             # ----------------------------------------------------
             # Prompt
             # ----------------------------------------------------
 
-            log("Building prompt...")
+            _log("DEBUG", "Building prompt...", segment_id=segment_id)
 
             prompt_start = time.time()
 
             prompt = build_context(seg)
 
-            log(
-                f"Prompt built in "
-                f"{time.time() - prompt_start:.3f}s"
-            )
+            prompt_ms = (time.time() - prompt_start) * 1000
+            _log("INFO", f"Prompt built in {prompt_ms/1000:.3f}s", segment_id=segment_id, duration_ms=round(prompt_ms, 2), prompt_length=len(prompt))
 
-            log(
-                f"Prompt length: "
-                f"{len(prompt)} characters"
-            )
+            _log("DEBUG", f"Prompt length: {len(prompt)} characters", segment_id=segment_id, prompt_length=len(prompt))
 
             content = [
                 {
@@ -679,9 +606,7 @@ def main():
             # Chat template
             # ----------------------------------------------------
 
-            log(
-                "Applying chat template..."
-            )
+            _log("DEBUG", "Applying chat template...", segment_id=segment_id)
 
             template_start = time.time()
 
@@ -691,23 +616,14 @@ def main():
                 add_generation_prompt=True,
             )
 
-            log(
-                f"Chat template complete in "
-                f"{time.time() - template_start:.3f}s"
-            )
-
-            log(
-                f"Formatted prompt length: "
-                f"{len(text)} characters"
-            )
+            template_ms = (time.time() - template_start) * 1000
+            _log("INFO", f"Chat template complete in {template_ms/1000:.3f}s", segment_id=segment_id, duration_ms=round(template_ms, 2), formatted_prompt_length=len(text))
 
             # ----------------------------------------------------
             # Processor
             # ----------------------------------------------------
 
-            log(
-                "STARTING IMAGE PROCESSING"
-            )
+            _log("INFO", "STARTING IMAGE PROCESSING", segment_id=segment_id)
 
             processor_start = time.time()
 
@@ -718,10 +634,8 @@ def main():
                 return_tensors="pt",
             )
 
-            log(
-                f"IMAGE PROCESSING COMPLETE in "
-                f"{time.time() - processor_start:.2f}s"
-            )
+            proc_img_ms = (time.time() - processor_start) * 1000
+            _log("INFO", f"IMAGE PROCESSING COMPLETE in {proc_img_ms/1000:.2f}s", segment_id=segment_id, duration_ms=round(proc_img_ms, 2))
 
             tensor_shapes = {}
 
@@ -731,13 +645,8 @@ def main():
                         value.shape
                     )
 
-            log(
-                f"Input tensors: {tensor_shapes}"
-            )
-
-            log(
-                "Moving inputs to model device..."
-            )
+            _log("DEBUG", f"Input tensors: {tensor_shapes}", segment_id=segment_id, tensor_shapes=tensor_shapes)
+            _log("INFO", "Moving inputs to model device...", segment_id=segment_id, model_device=str(getattr(model, 'device', 'unknown')))
 
             move_start = time.time()
 
@@ -745,24 +654,17 @@ def main():
                 model.device
             )
 
-            log(
-                f"Inputs moved in "
-                f"{time.time() - move_start:.3f}s"
-            )
+            move_ms = (time.time() - move_start) * 1000
+            _log("INFO", f"Inputs moved in {move_ms/1000:.3f}s", segment_id=segment_id, duration_ms=round(move_ms, 2))
 
             # ----------------------------------------------------
             # Generation
             # ----------------------------------------------------
 
-            log("========================================")
-            log(
-                f"STARTING GENERATION: "
-                f"{segment_id}"
-            )
-            log(
-                "CPU inference may take several minutes."
-            )
-            log("========================================")
+            _log("INFO", "========================================")
+            _log("INFO", f"STARTING GENERATION: {segment_id}", segment_id=segment_id, segment_index=segment_index)
+            _log("INFO", "CPU inference may take several minutes.", segment_id=segment_id)
+            _log("INFO", "========================================")
 
             generation_start = time.time()
 
@@ -776,24 +678,16 @@ def main():
             generation_time = (
                 time.time() - generation_start
             )
+            generation_ms = generation_time * 1000
 
-            log(
-                f"GENERATION COMPLETE in "
-                f"{generation_time:.2f}s"
-            )
-
-            log(
-                f"Generated tensor shape: "
-                f"{tuple(generated.shape)}"
-            )
+            _log("INFO", f"GENERATION COMPLETE in {generation_time:.2f}s", segment_id=segment_id, duration_ms=round(generation_ms, 2), generated_shape=str(tuple(generated.shape)))
 
             # ----------------------------------------------------
             # Decode
             # ----------------------------------------------------
 
-            log(
-                "Decoding generated tokens..."
-            )
+            _log("DEBUG", "Decoding generated tokens...", segment_id=segment_id)
+            decode_start = time.time()
 
             trimmed = generated[
                 :,
@@ -806,11 +700,10 @@ def main():
                 clean_up_tokenization_spaces=False,
             )[0].strip()
 
+            decode_ms = (time.time() - decode_start) * 1000
+
             if not desc:
-                log(
-                    f"ERROR: empty description "
-                    f"for segment {segment_id}"
-                )
+                _log("ERROR", f"empty description for segment {segment_id}", segment_id=segment_id, duration_ms=round(decode_ms, 2))
 
                 shutil.rmtree(
                     tmp_root,
@@ -819,14 +712,8 @@ def main():
 
                 return 3
 
-            log(
-                f"Description generated "
-                f"({len(desc)} chars):"
-            )
-
-            log(
-                desc
-            )
+            _log("INFO", f"Description generated ({len(desc)} chars):", segment_id=segment_id, description_length=len(desc), decode_ms=round(decode_ms, 2))
+            _log("INFO", desc, segment_id=segment_id, description_length=len(desc))
 
             descriptions.append(
                 {
@@ -837,19 +724,14 @@ def main():
                 }
             )
 
-            log(
-                f"Segment {segment_id} COMPLETE "
-                f"in "
-                f"{time.time() - segment_start:.2f}s"
-            )
+            segment_ms = (time.time() - segment_start) * 1000
+            _log("INFO", f"Segment {segment_id} COMPLETE in {segment_ms/1000:.2f}s", segment_id=segment_id, duration_ms=round(segment_ms, 2), segment_index=segment_index)
 
     except SystemExit:
         raise
 
     except Exception as e:
-        log(
-            f"ERROR: inference failed: {e}"
-        )
+        _log("ERROR", f"inference failed: {e}", error=str(e))
 
         shutil.rmtree(
             tmp_root,
@@ -858,14 +740,14 @@ def main():
 
         return 3
 
+    vlm_total_ms = (time.time() - vlm_total_start) * 1000
+
     # ------------------------------------------------------------
     # Write output
     # ------------------------------------------------------------
 
     try:
-        log(
-            "Writing output JSON..."
-        )
+        _log("INFO", "Writing output JSON...", output_path=args.output)
 
         out = {
             "video_id": video_id,
@@ -878,14 +760,10 @@ def main():
                 f,
             )
 
-        log(
-            f"Output written: {args.output}"
-        )
+        _log("INFO", f"Output written: {args.output}", output_path=args.output)
 
     except Exception as e:
-        log(
-            f"ERROR: failed to write output: {e}"
-        )
+        _log("ERROR", f"failed to write output: {e}", error=str(e), output_path=args.output)
 
         shutil.rmtree(
             tmp_root,
@@ -899,16 +777,11 @@ def main():
         ignore_errors=True,
     )
 
-    log("========================================")
-    log(
-        f"VISION WORKER COMPLETE in "
-        f"{time.time() - total_start:.2f}s"
-    )
-    log(
-        f"Descriptions generated: "
-        f"{len(descriptions)}"
-    )
-    log("========================================")
+    total_ms = (time.time() - total_start) * 1000
+    _log("INFO", "========================================")
+    _log("INFO", f"VISION WORKER COMPLETE in {total_ms/1000:.2f}s", total_duration_ms=round(total_ms, 2), vlm_duration_ms=round(vlm_total_ms, 2), model_load_ms=round((model_start and (time.time() - model_start)*1000) if 'model_start' in locals() else 0, 2), segment_count=len(descriptions))
+    _log("INFO", f"Descriptions generated: {len(descriptions)}", description_count=len(descriptions), total_duration_ms=round(total_ms, 2))
+    _log("INFO", "========================================")
 
     return 0
 

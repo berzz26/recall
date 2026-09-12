@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/berzz26/recall/services/api/internal/storage"
@@ -133,7 +135,9 @@ type qwenOutput struct {
 }
 
 func (q *SmolVLMDescriber) DescribeVideo(ctx context.Context, input VideoDescriptionInput) ([]DescriptionResult, error) {
+	visionStart := time.Now()
 	if len(input.Segments) == 0 {
+		slog.Info("vision: empty segments, skipping", "video_id", input.VideoID.String(), "duration_ms", 0)
 		return nil, nil
 	}
 	if _, err := os.Stat(q.scriptPath); err != nil {
@@ -145,6 +149,7 @@ func (q *SmolVLMDescriber) DescribeVideo(ctx context.Context, input VideoDescrip
 		return nil, err
 	}
 	defer os.RemoveAll(tmpDir)
+	slog.Info("vision: start", "video_id", input.VideoID.String(), "segments", len(input.Segments), "max_frames_per_segment", q.maxFrames, "model", q.modelName, "model_version", q.modelVersion)
 
 	var segs []qwenSegment
 	for _, seg := range input.Segments {
@@ -252,6 +257,7 @@ func (q *SmolVLMDescriber) DescribeVideo(ctx context.Context, input VideoDescrip
 		})
 	}
 
+	prepStart := time.Now()
 	req := qwenInput{VideoID: input.VideoID.String(), Segments: segs}
 	raw, err := json.Marshal(req)
 	if err != nil {
@@ -262,24 +268,65 @@ func (q *SmolVLMDescriber) DescribeVideo(ctx context.Context, input VideoDescrip
 	if err := os.WriteFile(inputPath, raw, 0644); err != nil {
 		return nil, err
 	}
+	prepMs := time.Since(prepStart).Milliseconds()
+	slog.Info("vision: input prepared", "video_id", input.VideoID.String(), "segments", len(segs), "duration_ms", prepMs)
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, q.timeout)
 	defer cancel()
 	cmd := exec.CommandContext(timeoutCtx, q.pythonPath, q.scriptPath, "--input", inputPath, "--output", outputPath)
 	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	cmd.Stdout = &stderr
+	visionLogWriter := &visionLogWriter{}
+	cmd.Stderr = io.MultiWriter(&stderr, visionLogWriter)
+	cmd.Stdout = io.MultiWriter(&stderr, visionLogWriter)
+	subprocessStart := time.Now()
+	slog.Info("vision: subprocess start", "video_id", input.VideoID.String(), "script", q.scriptPath, "timeout", q.timeout.String())
 	if err := cmd.Run(); err != nil {
+		subprocessMs := time.Since(subprocessStart).Milliseconds()
 		msg := stderr.String()
-		if len(msg) > 800 {
-			msg = msg[:800]
+		if len(msg) > 2000 {
+			msg = msg[len(msg)-2000:]
 		}
 		if timeoutCtx.Err() == context.DeadlineExceeded {
+			slog.Error("vision: subprocess timeout", "video_id", input.VideoID.String(), "duration_ms", subprocessMs, "error", timeoutCtx.Err())
 			return nil, fmt.Errorf("smolvlm vision timeout: %w", timeoutCtx.Err())
 		}
-		return nil, fmt.Errorf("smolvlm vision failed: %s: %w", msg, err)
+		slog.Error("vision: subprocess failed", "video_id", input.VideoID.String(), "duration_ms", subprocessMs, "stderr_tail", strings.TrimSpace(msg))
+		trimmed := stderr.String()
+		if len(trimmed) > 800 {
+			trimmed = trimmed[:800]
+		}
+		return nil, fmt.Errorf("smolvlm vision failed: %s: %w", trimmed, err)
 	}
+	subprocessMs := time.Since(subprocessStart).Milliseconds()
+	// Flush any remaining buffered line from streaming writer
+	if trimmed := strings.TrimSpace(visionLogWriter.remaining); trimmed != "" {
+		var js map[string]any
+		if err := json.Unmarshal([]byte(trimmed), &js); err == nil {
+			level, _ := js["level"].(string)
+			msg, _ := js["msg"].(string)
+			if msg == "" {
+				msg = trimmed
+			}
+			delete(js, "msg")
+			attrs := []any{}
+			for k, v := range js {
+				attrs = append(attrs, slog.Any(k, v))
+			}
+			switch strings.ToUpper(level) {
+			case "ERROR":
+				slog.Error("vision subprocess: "+msg, attrs...)
+			case "WARN":
+				slog.Warn("vision subprocess: "+msg, attrs...)
+			default:
+				slog.Info("vision subprocess: "+msg, attrs...)
+			}
+		} else {
+			slog.Info("vision subprocess output", "output", trimmed)
+		}
+	}
+	slog.Info("vision: subprocess complete", "video_id", input.VideoID.String(), "duration_ms", subprocessMs, "segments", len(segs))
 
+	parseStart := time.Now()
 	outData, err := os.ReadFile(outputPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read vision output: %w", err)
@@ -288,6 +335,8 @@ func (q *SmolVLMDescriber) DescribeVideo(ctx context.Context, input VideoDescrip
 	if err := json.Unmarshal(outData, &out); err != nil {
 		return nil, fmt.Errorf("failed to parse vision output: %w", err)
 	}
+	parseMs := time.Since(parseStart).Milliseconds()
+	slog.Info("vision: output parsed", "video_id", input.VideoID.String(), "descriptions", len(out.Descriptions), "duration_ms", parseMs)
 	if out.VideoID != input.VideoID.String() {
 		return nil, fmt.Errorf("vision output video_id mismatch")
 	}
@@ -324,5 +373,58 @@ func (q *SmolVLMDescriber) DescribeVideo(ctx context.Context, input VideoDescrip
 			ModelName: modelName, ModelVersion: modelVersion,
 		})
 	}
+	totalMs := time.Since(visionStart).Milliseconds()
+	slog.Info("vision: complete",
+		"video_id", input.VideoID.String(),
+		"segments", len(input.Segments),
+		"descriptions", len(results),
+		"prep_ms", prepMs,
+		"subprocess_ms", subprocessMs,
+		"parse_ms", parseMs,
+		"total_duration_ms", totalMs,
+	)
 	return results, nil
+}
+
+// visionLogWriter streams VLM subprocess JSON logs line-by-line to slog
+type visionLogWriter struct {
+	remaining string
+}
+
+func (w *visionLogWriter) Write(p []byte) (int, error) {
+	text := w.remaining + string(p)
+	lines := strings.Split(text, "\n")
+	w.remaining = lines[len(lines)-1]
+	for _, line := range lines[:len(lines)-1] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		var js map[string]any
+		if err := json.Unmarshal([]byte(trimmed), &js); err == nil {
+			level, _ := js["level"].(string)
+			msg, _ := js["msg"].(string)
+			if msg == "" {
+				msg = trimmed
+			}
+			delete(js, "msg")
+			attrs := []any{}
+			for k, v := range js {
+				attrs = append(attrs, slog.Any(k, v))
+			}
+			switch strings.ToUpper(level) {
+			case "ERROR":
+				slog.Error("vision subprocess: "+msg, attrs...)
+			case "WARN":
+				slog.Warn("vision subprocess: "+msg, attrs...)
+			case "DEBUG":
+				slog.Debug("vision subprocess: "+msg, attrs...)
+			default:
+				slog.Info("vision subprocess: "+msg, attrs...)
+			}
+		} else {
+			slog.Info("vision subprocess output", "output", trimmed)
+		}
+	}
+	return len(p), nil
 }
