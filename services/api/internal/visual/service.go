@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/berzz26/recall/services/api/internal/detection"
@@ -38,6 +40,7 @@ func NewService(detRepo *detection.Repository, frameRepo *video_frame.Repository
 }
 
 func (s *Service) AnalyzeVideo(ctx context.Context, videoID uuid.UUID) ([]detection.Detection, error) {
+	visualStart := time.Now()
 	frames, err := s.frameRepo.GetByVideoID(ctx, videoID)
 	if err != nil {
 		return nil, fmt.Errorf("get frames: %w", err)
@@ -46,11 +49,13 @@ func (s *Service) AnalyzeVideo(ctx context.Context, videoID uuid.UUID) ([]detect
 		return nil, fmt.Errorf("delete old detections: %w", err)
 	}
 	if len(frames) == 0 {
+		slog.Info("visual: no frames, skipped", "video_id", videoID.String(), "duration_ms", time.Since(visualStart).Milliseconds())
 		return []detection.Detection{}, nil
 	}
 	if s.analyzer == nil {
 		return nil, fmt.Errorf("analyzer not configured")
 	}
+	slog.Info("visual: start", "video_id", videoID.String(), "frames", len(frames), "threshold", s.threshold, "detector", s.detectorName)
 	type tmpFile struct {
 		path string
 		frame video_frame.VideoFrame
@@ -93,10 +98,16 @@ func (s *Service) AnalyzeVideo(ctx context.Context, videoID uuid.UUID) ([]detect
 		})
 	}
 
+	prepMs := time.Since(visualStart).Milliseconds()
+	slog.Info("visual: frames prepared for detection", "video_id", videoID.String(), "frames", len(inputs), "prep_duration_ms", prepMs)
+	analyzeStart := time.Now()
 	results, err := s.analyzer.AnalyzeBatch(ctx, inputs)
+	analyzeMs := time.Since(analyzeStart).Milliseconds()
 	if err != nil {
+		slog.Error("visual: detection failed", "video_id", videoID.String(), "duration_ms", analyzeMs, "error", err)
 		return nil, fmt.Errorf("analyze: %w", err)
 	}
+	slog.Info("visual: detection complete", "video_id", videoID.String(), "frames", len(inputs), "duration_ms", analyzeMs)
 
 	var toInsert []detection.Detection
 	for _, f := range frames {
@@ -123,10 +134,23 @@ func (s *Service) AnalyzeVideo(ctx context.Context, videoID uuid.UUID) ([]detect
 		}
 	}
 
+	persistStart := time.Now()
 	saved, err := s.detectionRepo.CreateBatch(ctx, toInsert)
+	persistMs := time.Since(persistStart).Milliseconds()
 	if err != nil {
+		slog.Error("visual: persist failed", "video_id", videoID.String(), "duration_ms", persistMs, "error", err)
 		return nil, fmt.Errorf("persist detections: %w", err)
 	}
+	totalMs := time.Since(visualStart).Milliseconds()
+	slog.Info("visual: complete",
+		"video_id", videoID.String(),
+		"frames", len(frames),
+		"detections", len(saved),
+		"prep_ms", prepMs,
+		"analyze_ms", analyzeMs,
+		"persist_ms", persistMs,
+		"total_duration_ms", totalMs,
+	)
 	return saved, nil
 }
 

@@ -145,7 +145,7 @@ func TestInitialScan(t *testing.T) {
 	list, _ := videoSvc.ListVideos(ctx, 100, 0)
 	count := 0
 	for _, v := range list {
-		if v.SourcePath != nil && ( *v.SourcePath == filepath.Join(dir, "a.mp4") || *v.SourcePath == filepath.Join(dir, "b.mp4") || *v.SourcePath == filepath.Join(dir, "c.mkv") || *v.SourcePath == filepath.Join(sub, "d.mov")) {
+		if v.SourcePath != nil && (*v.SourcePath == filepath.Join(dir, "a.mp4") || *v.SourcePath == filepath.Join(dir, "b.mp4") || *v.SourcePath == filepath.Join(dir, "c.mkv") || *v.SourcePath == filepath.Join(sub, "d.mov")) {
 			if v.ContentHash == "" || v.SizeBytes == 0 || v.SourceMtime == nil {
 				t.Fatalf("metadata not populated")
 			}

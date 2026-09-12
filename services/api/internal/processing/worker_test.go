@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/berzz26/recall/pkg/database"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
+	"github.com/google/uuid"
 )
 
 func newTestVideoService(t *testing.T) (*video.Service, func()) {

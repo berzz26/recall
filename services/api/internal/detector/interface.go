@@ -7,14 +7,14 @@ import (
 )
 
 type FrameInput struct {
-	FrameID     uuid.UUID
-	VideoID     uuid.UUID
-	SegmentID   uuid.UUID
-	Timestamp   float64
-	Width       int
-	Height      int
-	StorageKey  string
-	LocalPath   string
+	FrameID    uuid.UUID
+	VideoID    uuid.UUID
+	SegmentID  uuid.UUID
+	Timestamp  float64
+	Width      int
+	Height     int
+	StorageKey string
+	LocalPath  string
 }
 
 type DetectionResult struct {

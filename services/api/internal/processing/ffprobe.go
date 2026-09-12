@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/berzz26/recall/services/api/internal/segment_description"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
-	"github.com/berzz26/recall/services/api/internal/segment_description"
 	"github.com/berzz26/recall/services/api/internal/video_event"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
@@ -195,6 +195,8 @@ func getExt(key string) string {
 }
 
 func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
+	pipelineStart := time.Now()
+	slog.Info("pipeline: start", "video_id", v.ID.String(), "source_type", v.SourceType)
 	var videoPath string
 	var tempFile string
 	var cleanup func()
@@ -251,10 +253,13 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	slog.Info("ffprobe start", "video_id", v.ID.String(), "path", videoPath)
+	ffprobeStart := time.Now()
+	slog.Info("ffprobe: start", "video_id", v.ID.String(), "path", videoPath)
 	err := cmd.Run()
+	ffprobeMs := time.Since(ffprobeStart).Milliseconds()
 	if err != nil {
 		if probeCtx.Err() == context.DeadlineExceeded {
+			slog.Error("ffprobe: timeout", "video_id", v.ID.String(), "duration_ms", ffprobeMs, "error", probeCtx.Err())
 			return fmt.Errorf("ffprobe timeout")
 		}
 		msg := strings.TrimSpace(stderr.String())
@@ -264,13 +269,18 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 		if msg == "" {
 			msg = err.Error()
 		}
+		slog.Error("ffprobe: failed", "video_id", v.ID.String(), "duration_ms", ffprobeMs, "error", msg)
 		return fmt.Errorf("ffprobe failed: %s", msg)
 	}
+	slog.Info("ffprobe: complete", "video_id", v.ID.String(), "duration_ms", ffprobeMs, "output_bytes", stdout.Len())
 
+	parseStart := time.Now()
 	var result probeResult
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		return fmt.Errorf("failed to parse ffprobe json: %w", err)
 	}
+	parseMs := time.Since(parseStart).Milliseconds()
+	slog.Debug("ffprobe: parsed", "video_id", v.ID.String(), "duration_ms", parseMs)
 
 	meta := &video_media.MediaMetadata{
 		VideoID: v.ID,
@@ -320,20 +330,27 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 		meta.AudioChannelLayout = audioStream.ChannelLayout
 	}
 
+	mediaStart := time.Now()
 	if _, err := p.mediaService.Upsert(ctx, meta); err != nil {
 		return fmt.Errorf("failed to persist media metadata: %w", err)
 	}
+	mediaMs := time.Since(mediaStart).Milliseconds()
+	slog.Info("pipeline: media persisted", "video_id", v.ID.String(), "duration_ms", mediaMs)
 
 	var segments []video_segment.VideoSegment
 	if p.segmentService != nil {
 		if meta.DurationSeconds == nil || *meta.DurationSeconds <= 0 {
 			return fmt.Errorf("video duration unavailable; cannot generate segments")
 		}
+		segStart := time.Now()
 		var err error
 		segments, err = p.segmentService.GenerateForVideo(ctx, v.ID, *meta.DurationSeconds)
+		segMs := time.Since(segStart).Milliseconds()
 		if err != nil {
+			slog.Error("pipeline: segment generation failed", "video_id", v.ID.String(), "duration_ms", segMs, "error", err)
 			return fmt.Errorf("failed to generate segments: %w", err)
 		}
+		slog.Info("pipeline: segments generated", "video_id", v.ID.String(), "segments", len(segments), "duration_ms", segMs, "duration_seconds", *meta.DurationSeconds)
 	} else if p.frameService != nil {
 		return fmt.Errorf("frame extraction requires segments")
 	}
@@ -354,35 +371,62 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 			w = 1280
 			h = 720
 		}
+		frameStart := time.Now()
 		if _, err := p.frameService.GenerateForVideo(ctx, v, segments, *meta.DurationSeconds, w, h); err != nil {
+			slog.Error("pipeline: frame extraction failed", "video_id", v.ID.String(), "duration_ms", time.Since(frameStart).Milliseconds(), "error", err)
 			return fmt.Errorf("failed to extract frames: %w", err)
 		}
+		frameMs := time.Since(frameStart).Milliseconds()
+		slog.Info("pipeline: frame extraction complete", "video_id", v.ID.String(), "duration_ms", frameMs)
 	}
 
 	if p.visualService != nil {
+		visualStart := time.Now()
+		slog.Info("pipeline: detection start", "video_id", v.ID.String())
 		if _, err := p.visualService.AnalyzeVideo(ctx, v.ID); err != nil {
+			slog.Error("pipeline: detection failed", "video_id", v.ID.String(), "duration_ms", time.Since(visualStart).Milliseconds(), "error", err)
 			return fmt.Errorf("failed to analyze visuals: %w", err)
 		}
+		visualMs := time.Since(visualStart).Milliseconds()
+		slog.Info("pipeline: detection complete", "video_id", v.ID.String(), "duration_ms", visualMs)
 	}
 
 	if p.trackService != nil {
+		trackStart := time.Now()
+		slog.Info("pipeline: tracking start", "video_id", v.ID.String())
 		if _, err := p.trackService.GenerateForVideoID(ctx, v.ID); err != nil {
+			slog.Error("pipeline: tracking failed", "video_id", v.ID.String(), "duration_ms", time.Since(trackStart).Milliseconds(), "error", err)
 			return fmt.Errorf("failed to generate tracks: %w", err)
 		}
+		trackMs := time.Since(trackStart).Milliseconds()
+		slog.Info("pipeline: tracking complete", "video_id", v.ID.String(), "duration_ms", trackMs)
 	}
 
 	if p.eventService != nil {
+		eventStart := time.Now()
+		slog.Info("pipeline: event generation start", "video_id", v.ID.String())
 		if _, err := p.eventService.GenerateForVideo(ctx, v.ID); err != nil {
+			slog.Error("pipeline: event generation failed", "video_id", v.ID.String(), "duration_ms", time.Since(eventStart).Milliseconds(), "error", err)
 			return fmt.Errorf("failed to generate events: %w", err)
 		}
+		eventMs := time.Since(eventStart).Milliseconds()
+		slog.Info("pipeline: events complete", "video_id", v.ID.String(), "duration_ms", eventMs)
 	}
 
 	if p.descService != nil {
+		vlmStart := time.Now()
+		slog.Info("pipeline: VLM generation start", "video_id", v.ID.String())
 		if _, err := p.descService.GenerateForVideo(ctx, v.ID); err != nil {
+			slog.Error("pipeline: VLM generation failed", "video_id", v.ID.String(), "duration_ms", time.Since(vlmStart).Milliseconds(), "error", err)
 			return fmt.Errorf("failed to generate descriptions: %w", err)
 		}
+		vlmMs := time.Since(vlmStart).Milliseconds()
+		slog.Info("pipeline: VLM generation complete", "video_id", v.ID.String(), "duration_ms", vlmMs)
+	} else {
+		slog.Info("pipeline: VLM generation skipped (disabled)", "video_id", v.ID.String())
 	}
 
-	slog.Info("ffprobe success", "video_id", v.ID.String())
+	totalMs := time.Since(pipelineStart).Milliseconds()
+	slog.Info("pipeline: success", "video_id", v.ID.String(), "total_duration_ms", totalMs)
 	return nil
 }

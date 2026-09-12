@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { client } from '../api/client'
 import type { Video, MediaMetadata, Segment, Frame, Detection, Track, Event, SegmentDescription } from '../api/types'
 import { StatusBadge } from '../components/StatusBadge'
@@ -7,6 +7,7 @@ import { Loading, ErrorState } from '../components/Loading'
 
 export default function VideoDetail() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const [video, setVideo] = useState<Video | null>(null)
   const [media, setMedia] = useState<MediaMetadata | null>(null)
   const [segments, setSegments] = useState<Segment[]>([])
@@ -38,7 +39,7 @@ export default function VideoDetail() {
           try {
             const links: any[] = await client.get<any[]>(`/api/v1/tracks/${tr.id}/detections`)
             links.forEach((l: any) => { map[l.detection_id] = tr.track_index })
-          } catch {}
+          } catch { }
         }))
         setDetToTrack(map)
       } catch { setTracks([]); setDetToTrack({}) }
@@ -55,6 +56,15 @@ export default function VideoDetail() {
     const t = setInterval(fetchAll, 3000)
     return () => clearInterval(t)
   }, [video?.status])
+
+  const onDelete = async () => {
+    if (!video) return
+    if (!confirm(`Delete video "${video.filename}"? This will permanently delete the video and all its frames, tracks and metadata. This cannot be undone.`)) return
+    try {
+      await client.del(`/api/v1/videos/${video.id}`)
+      navigate('/')
+    } catch (e: any) { alert(`Delete failed: ${e.message}`) }
+  }
 
   if (err) return <ErrorState error={err} retry={fetchAll} />
   if (!video) return <Loading />
@@ -75,7 +85,10 @@ export default function VideoDetail() {
   return (
     <div>
       <div className="card">
-        <h3>{video.filename} <StatusBadge status={video.status} /></h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <h3 style={{ margin: 0 }}>{video.filename} <StatusBadge status={video.status} /></h3>
+          <button className="btn" style={{ color: '#f87171', borderColor: '#f87171' }} onClick={onDelete}>Delete Video</button>
+        </div>
         <dl className="kv">
           <dt>Video ID</dt><dd>{video.id}</dd>
           <dt>Source type</dt><dd>{video.source_type}</dd>
@@ -252,16 +265,24 @@ export default function VideoDetail() {
               })
               .map(d => {
                 const seg = segments.find(s => s.id === d.segment_id)
-                const timeLabel = seg ? `${seg.start_time.toFixed(0)}s → ${seg.end_time.toFixed(0)}s` : d.segment_id.slice(0, 8)
+                const fmtTime = (s: number) => {
+                  const m = Math.floor(s / 60)
+                  const ss = Math.floor(s % 60)
+                  return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
+                }
+                const timeLabel = seg
+                  ? `${fmtTime(seg.start_time)} → ${fmtTime(seg.end_time)}`
+                  : d.segment_id
+                    ? d.segment_id.slice(0, 8)
+                    : 'Unknown segment'
                 return (
                   <div key={d.id} style={{ padding: 12, background: '#0f1115', border: '1px solid #2a2e39', borderRadius: 6, cursor: seg ? 'pointer' : 'default' }} onClick={() => {
                     if (!seg) return
                     const el = document.getElementById(`seg-${seg.id}`)
                     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                    // also highlight frames by briefly setting selectedTrack to relevant? keep simple
                   }}>
                     <div style={{ fontSize: 11, color: '#9aa0b0', marginBottom: 4 }}>{timeLabel} — Segment {seg?.segment_index ?? '?'}</div>
-                    <div style={{ fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>"{d.description}"</div>
+                    <div style={{ fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{d.description}</div>
                     <div style={{ fontSize: 11, color: '#9aa0b0', marginTop: 6 }}>Model: {d.model_name} v{d.model_version}</div>
                   </div>
                 )
@@ -289,38 +310,38 @@ export default function VideoDetail() {
               return dets.some(d => detToTrack[d.id] === selectedTrack)
             })
             .map(f => {
-            const dets = detectionsByFrame[f.id] || []
-            return (
-              <div key={f.id} className="frame-card" onClick={() => setSelectedFrame(f)} style={{ cursor: 'pointer', opacity: selectedTrack !== 'all' && !dets.some(d => detToTrack[d.id] === selectedTrack) ? 0.6 : 1 }}>
-                <div className="img-wrap">
-                  <img src={imgSrc(f)} alt={`frame ${f.frame_index}`} loading="lazy" />
-                  {dets.map(d => {
-                    const trackIdx = detToTrack[d.id]
-                    const highlighted = selectedTrack !== 'all' && trackIdx === selectedTrack
-                    const dimmed = selectedTrack !== 'all' && trackIdx !== selectedTrack
-                    return (
-                      <div key={d.id} className="bbox" style={{
-                        left: `${d.bbox_x * 100}%`,
-                        top: `${d.bbox_y * 100}%`,
-                        width: `${d.bbox_width * 100}%`,
-                        height: `${d.bbox_height * 100}%`,
-                        borderColor: highlighted ? '#22c55e' : undefined,
-                        background: highlighted ? 'rgba(34,197,94,0.18)' : dimmed ? 'rgba(250,204,21,0.06)' : undefined,
-                        opacity: dimmed ? 0.4 : 1,
-                      }}>
-                        <span className="bbox-label" style={highlighted ? { background: '#22c55e' } : undefined}>{d.label} {(d.confidence * 100).toFixed(0)}%{trackIdx !== undefined ? ` T${trackIdx}` : ''}</span>
-                      </div>
-                    )
-                  })}
+              const dets = detectionsByFrame[f.id] || []
+              return (
+                <div key={f.id} className="frame-card" onClick={() => setSelectedFrame(f)} style={{ cursor: 'pointer', opacity: selectedTrack !== 'all' && !dets.some(d => detToTrack[d.id] === selectedTrack) ? 0.6 : 1 }}>
+                  <div className="img-wrap">
+                    <img src={imgSrc(f)} alt={`frame ${f.frame_index}`} loading="lazy" />
+                    {dets.map(d => {
+                      const trackIdx = detToTrack[d.id]
+                      const highlighted = selectedTrack !== 'all' && trackIdx === selectedTrack
+                      const dimmed = selectedTrack !== 'all' && trackIdx !== selectedTrack
+                      return (
+                        <div key={d.id} className="bbox" style={{
+                          left: `${d.bbox_x * 100}%`,
+                          top: `${d.bbox_y * 100}%`,
+                          width: `${d.bbox_width * 100}%`,
+                          height: `${d.bbox_height * 100}%`,
+                          borderColor: highlighted ? '#22c55e' : undefined,
+                          background: highlighted ? 'rgba(34,197,94,0.18)' : dimmed ? 'rgba(250,204,21,0.06)' : undefined,
+                          opacity: dimmed ? 0.4 : 1,
+                        }}>
+                          <span className="bbox-label" style={highlighted ? { background: '#22c55e' } : undefined}>{d.label} {(d.confidence * 100).toFixed(0)}%{trackIdx !== undefined ? ` T${trackIdx}` : ''}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div className="meta">
+                    <div><b>Frame {String(f.frame_index).padStart(6, '0')}</b> {f.timestamp_seconds.toFixed(2)}s</div>
+                    <div>Segment {segments.find(s => s.id === f.segment_id)?.segment_index ?? '-'} · {f.width}×{f.height}</div>
+                    <div>{dets.length} detections {selectedTrack !== 'all' ? `(${dets.filter(d => detToTrack[d.id] === selectedTrack).length} in T${selectedTrack})` : ''}</div>
+                  </div>
                 </div>
-                <div className="meta">
-                  <div><b>Frame {String(f.frame_index).padStart(6, '0')}</b> {f.timestamp_seconds.toFixed(2)}s</div>
-                  <div>Segment {segments.find(s => s.id === f.segment_id)?.segment_index ?? '-'} · {f.width}×{f.height}</div>
-                  <div>{dets.length} detections {selectedTrack !== 'all' ? `(${dets.filter(d => detToTrack[d.id] === selectedTrack).length} in T${selectedTrack})` : ''}</div>
-                </div>
-              </div>
-            )
-          })}
+              )
+            })}
         </div>
         {frames.length === 0 && <div className="empty">No frames</div>}
       </div>

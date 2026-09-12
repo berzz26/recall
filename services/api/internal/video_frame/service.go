@@ -7,6 +7,7 @@ import (
 	"image"
 	_ "image/jpeg"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"os/exec"
@@ -87,6 +88,7 @@ func frameStorageKey(videoID uuid.UUID, frameIndex int) string {
 }
 
 func (s *Service) GenerateForVideo(ctx context.Context, v *video.Video, segments []video_segment.VideoSegment, durationSeconds float64, width, height int) ([]VideoFrame, error) {
+	frameStart := time.Now()
 	if s.storage == nil {
 		return nil, fmt.Errorf("storage not configured")
 	}
@@ -100,6 +102,14 @@ func (s *Service) GenerateForVideo(ctx context.Context, v *video.Video, segments
 	if width <= 0 || height <= 0 {
 		return nil, fmt.Errorf("invalid dimensions")
 	}
+	slog.Info("frame: start",
+		"video_id", v.ID.String(),
+		"duration_seconds", durationSeconds,
+		"frame_count", len(timestamps),
+		"interval", s.sampleInterval.String(),
+		"width", width, "height", height,
+		"ffmpeg", s.ffmpegPath, "jpeg_quality", s.jpegQuality,
+	)
 
 	var videoPath string
 	var tempVideo string
@@ -170,8 +180,11 @@ func (s *Service) GenerateForVideo(ctx context.Context, v *video.Video, segments
 			_ = s.storage.Delete(ctx, k)
 		}
 	}
+	var totalFFmpegMs int64
+	var totalSaveMs int64
 
 	for i, ts := range timestamps {
+		perFrameStart := time.Now()
 		seg := FindSegment(segments, ts)
 		if seg == nil {
 			cleanupOnFail()
@@ -197,7 +210,10 @@ func (s *Service) GenerateForVideo(ctx context.Context, v *video.Video, segments
 		)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
+		ffmpegStart := time.Now()
 		err = cmd.Run()
+		ffmpegMs := time.Since(ffmpegStart).Milliseconds()
+		totalFFmpegMs += ffmpegMs
 		cancel()
 		if err != nil {
 			os.Remove(tmpPath)
@@ -210,8 +226,10 @@ func (s *Service) GenerateForVideo(ctx context.Context, v *video.Video, segments
 				msg = err.Error()
 			}
 			if extractCtx.Err() == context.DeadlineExceeded {
+				slog.Error("frame: ffmpeg timeout", "video_id", v.ID.String(), "frame_index", i, "timestamp", ts, "duration_ms", ffmpegMs, "error", extractCtx.Err())
 				return nil, fmt.Errorf("ffmpeg timeout at timestamp %f: %w", ts, extractCtx.Err())
 			}
+			slog.Error("frame: ffmpeg failed", "video_id", v.ID.String(), "frame_index", i, "timestamp", ts, "duration_ms", ffmpegMs, "error", msg)
 			return nil, fmt.Errorf("ffmpeg failed at %f: %s", ts, msg)
 		}
 
@@ -240,12 +258,15 @@ func (s *Service) GenerateForVideo(ctx context.Context, v *video.Video, segments
 			return nil, fmt.Errorf("failed to reopen temp frame: %w", err)
 		}
 		key := frameStorageKey(v.ID, i)
+		saveStart := time.Now()
 		if err := s.storage.Save(ctx, key, f2); err != nil {
 			f2.Close()
 			os.Remove(tmpPath)
 			cleanupOnFail()
 			return nil, fmt.Errorf("failed to store frame %d: %w", i, err)
 		}
+		saveMs := time.Since(saveStart).Milliseconds()
+		totalSaveMs += saveMs
 		f2.Close()
 		os.Remove(tmpPath)
 		createdKeys = append(createdKeys, key)
@@ -259,15 +280,39 @@ func (s *Service) GenerateForVideo(ctx context.Context, v *video.Video, segments
 			Width:            fw,
 			Height:           fh,
 		})
+		perFrameMs := time.Since(perFrameStart).Milliseconds()
+		slog.Debug("frame: frame complete",
+			"video_id", v.ID.String(),
+			"frame_index", i,
+			"timestamp", ts,
+			"segment_id", seg.ID.String(),
+			"ffmpeg_ms", ffmpegMs,
+			"save_ms", saveMs,
+			"total_ms", perFrameMs,
+			"width", fw, "height", fh,
+		)
 	}
 
+	persistStart := time.Now()
 	saved, err := s.repo.CreateBatch(ctx, frames)
+	persistMs := time.Since(persistStart).Milliseconds()
 	if err != nil {
 		for _, k := range createdKeys {
 			_ = s.storage.Delete(ctx, k)
 		}
+		slog.Error("frame: persist failed", "video_id", v.ID.String(), "duration_ms", persistMs, "error", err)
 		return nil, fmt.Errorf("failed to persist frames: %w", err)
 	}
+	totalMs := time.Since(frameStart).Milliseconds()
+	slog.Info("frame: complete",
+		"video_id", v.ID.String(),
+		"frame_count", len(saved),
+		"total_duration_ms", totalMs,
+		"ffmpeg_total_ms", totalFFmpegMs,
+		"save_total_ms", totalSaveMs,
+		"persist_ms", persistMs,
+		"avg_ms_per_frame", float64(totalMs)/float64(len(saved)),
+	)
 	return saved, nil
 }
 

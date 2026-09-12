@@ -12,6 +12,10 @@ workers/detector/yolov8n.pt
 services/web/node_modules/
 services/web/dist/
 workers/detector/__pycache__/
+workers/vision/__pycache__/
+workers/vision/.venv/
 __pycache__/
 *.log
 .tmp/
+.cache/huggingface/
+.huggingface/

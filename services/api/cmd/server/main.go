@@ -17,9 +17,10 @@ import (
 	"github.com/berzz26/recall/services/api/internal/health"
 	local_source "github.com/berzz26/recall/services/api/internal/local_source"
 	"github.com/berzz26/recall/services/api/internal/processing"
-	"github.com/berzz26/recall/services/api/internal/storage"
-	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/berzz26/recall/services/api/internal/segment_description"
+	"github.com/berzz26/recall/services/api/internal/storage"
+	"github.com/berzz26/recall/services/api/internal/tracker"
+	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/berzz26/recall/services/api/internal/video_event"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
@@ -90,14 +91,55 @@ func main() {
 	visualService := visual.NewService(detectionRepo, videoFrameRepo, store, yolo, cfg.DetectionThreshold, cfg.DetectorName, cfg.DetectorVersion)
 
 	trackRepo := video_track.NewRepository(db.DB)
-	trackService := video_track.NewServiceWithDeps(trackRepo, videoFrameRepo, detectionRepo, nil)
+	selectedTracker, err := tracker.New(cfg.TrackerType, cfg.TrackerHighThreshold, cfg.TrackerLowThreshold, cfg.TrackerMatchThreshold, cfg.TrackerTrackBuffer)
+	if err != nil {
+		slog.Error("failed to create tracker", "error", err, "tracker_type", cfg.TrackerType)
+		os.Exit(1)
+	}
+	slog.Info("tracker selected", "tracker_type", selectedTracker.Name(), "tracker_version", selectedTracker.Version())
+	trackService := video_track.NewServiceWithDeps(trackRepo, videoFrameRepo, detectionRepo, selectedTracker)
 
 	eventRepo := video_event.NewRepository(db.DB)
 	eventService := video_event.NewServiceWithThreshold(eventRepo, trackRepo, videoSegmentRepo, detectionRepo, cfg.EventMovementThreshold)
 
 	segmentDescRepo := segment_description.NewRepository(db.DB)
-	describer := vision.NewDeterministicDescriber(cfg.VisionModel, cfg.VisionModelVersion, cfg.VisionMaxFrames)
-	segmentDescService := segment_description.NewService(segmentDescRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, describer, cfg.VisionMaxFrames)
+	var segmentDescService *segment_description.Service
+	var describer vision.VisionDescriber
+	if cfg.EnableVideoDescription {
+		switch cfg.VisionProvider {
+		case "gemini":
+			describer = vision.NewGeminiDescriber(cfg.VisionModel, cfg.VisionModelVersion, cfg.VisionMaxFrames, cfg.VisionMaxOutputTokens, cfg.VisionTimeout, cfg.GeminiAPIKey, store)
+			slog.Info("vision provider selected", "provider", "gemini", "model", cfg.VisionModel, "version", cfg.VisionModelVersion, "max_frames", cfg.VisionMaxFrames, "max_output_tokens", cfg.VisionMaxOutputTokens)
+		case "local":
+			visionScriptPath := filepath.Join("workers", "vision", "describe.py")
+			if _, err := os.Stat(visionScriptPath); err != nil {
+				if abs, err2 := filepath.Abs(visionScriptPath); err2 == nil {
+					if _, err3 := os.Stat(abs); err3 == nil {
+						visionScriptPath = abs
+					}
+				}
+				if _, err := os.Stat(visionScriptPath); err != nil {
+					alt := "/home/berzz/recall/workers/vision/describe.py"
+					if _, err2 := os.Stat(alt); err2 == nil {
+						visionScriptPath = alt
+					}
+				}
+			} else {
+				if abs, err := filepath.Abs(visionScriptPath); err == nil {
+					visionScriptPath = abs
+				}
+			}
+			describer = vision.NewSmolVLMDescriberWithConfig(cfg.VisionPythonPath, visionScriptPath, cfg.VisionModel, cfg.VisionModelPath, cfg.VisionModelVersion, cfg.VisionMaxFrames, cfg.VisionMaxOutputTokens, store, cfg.VisionTimeout)
+			slog.Info("vision provider selected", "provider", "local", "model", cfg.VisionModel, "model_path", cfg.VisionModelPath, "version", cfg.VisionModelVersion, "max_frames", cfg.VisionMaxFrames, "max_output_tokens", cfg.VisionMaxOutputTokens)
+		default:
+			slog.Error("unsupported vision provider", "provider", cfg.VisionProvider)
+			os.Exit(1)
+		}
+		segmentDescService = segment_description.NewService(segmentDescRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, describer, cfg.VisionModel, cfg.VisionModelVersion)
+		slog.Info("video description pipeline enabled", "provider", cfg.VisionProvider, "model", cfg.VisionModel, "version", cfg.VisionModelVersion)
+	} else {
+		slog.Info("video description pipeline disabled via ENABLE_VIDEO_DESCRIPTION=false — VLM generation will be skipped")
+	}
 
 	localSourceRepo := local_source.NewRepository(db.DB)
 	localSourceService := local_source.NewService(localSourceRepo, videoService, cfg.StabilityDuration)
