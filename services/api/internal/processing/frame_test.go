@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/berzz26/recall/pkg/database"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
+	"github.com/google/uuid"
 )
 
 func newFrameDeps(t *testing.T, interval time.Duration) (*video.Service, *video_media.Service, *video_segment.Service, *video_frame.Service, *database.Service, storage.Storage, string) {

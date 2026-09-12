@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/berzz26/recall/pkg/database"
 	"github.com/berzz26/recall/services/api/internal/detection"
 	"github.com/berzz26/recall/services/api/internal/detector"
@@ -16,6 +15,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
 	"github.com/berzz26/recall/services/api/internal/visual"
+	"github.com/google/uuid"
 )
 
 func newDetectionDeps(t *testing.T, analyzer detector.VisualAnalyzer) (*video.Service, *video_media.Service, *video_segment.Service, *video_frame.Service, *visual.Service, *database.Service, storage.Storage, string) {
@@ -151,7 +151,9 @@ func TestVisualFailureMarksFailed(t *testing.T) {
 }
 
 var ErrFakeFail = errString("fake analyzer failure")
+
 type errString string
+
 func (e errString) Error() string { return string(e) }
 
 func TestYoloIntegrationSkippedIfNoModel(t *testing.T) {

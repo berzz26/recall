@@ -23,16 +23,22 @@ const (
 )
 
 type SmolVLMDescriber struct {
-	pythonPath   string
-	scriptPath   string
-	modelName    string
-	modelVersion string
-	maxFrames    int
-	timeout      time.Duration
-	store        storage.Storage
+	pythonPath       string
+	scriptPath       string
+	modelName        string
+	modelPath        string
+	modelVersion     string
+	maxFrames        int
+	maxOutputTokens  int
+	timeout          time.Duration
+	store            storage.Storage
 }
 
 func NewSmolVLMDescriber(pythonPath, scriptPath, modelName, modelVersion string, maxFrames int, store storage.Storage, timeout time.Duration) *SmolVLMDescriber {
+	return NewSmolVLMDescriberWithConfig(pythonPath, scriptPath, modelName, "", modelVersion, maxFrames, 256, store, timeout)
+}
+
+func NewSmolVLMDescriberWithConfig(pythonPath, scriptPath, modelName, modelPath, modelVersion string, maxFrames, maxOutputTokens int, store storage.Storage, timeout time.Duration) *SmolVLMDescriber {
 	if pythonPath == "" {
 		pythonPath = "python3"
 	}
@@ -45,17 +51,22 @@ func NewSmolVLMDescriber(pythonPath, scriptPath, modelName, modelVersion string,
 	if maxFrames < 1 {
 		maxFrames = 3
 	}
+	if maxOutputTokens < 1 {
+		maxOutputTokens = 256
+	}
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
 	}
 	return &SmolVLMDescriber{
-		pythonPath:   pythonPath,
-		scriptPath:   scriptPath,
-		modelName:    modelName,
-		modelVersion: modelVersion,
-		maxFrames:    maxFrames,
-		timeout:      timeout,
-		store:        store,
+		pythonPath:      pythonPath,
+		scriptPath:      scriptPath,
+		modelName:       modelName,
+		modelPath:       modelPath,
+		modelVersion:    modelVersion,
+		maxFrames:       maxFrames,
+		maxOutputTokens: maxOutputTokens,
+		timeout:         timeout,
+		store:           store,
 	}
 }
 
@@ -274,6 +285,13 @@ func (q *SmolVLMDescriber) DescribeVideo(ctx context.Context, input VideoDescrip
 	timeoutCtx, cancel := context.WithTimeout(ctx, q.timeout)
 	defer cancel()
 	cmd := exec.CommandContext(timeoutCtx, q.pythonPath, q.scriptPath, "--input", inputPath, "--output", outputPath)
+	// Pass resolved configuration to Python so Go and Python cannot drift
+	cmd.Env = append(os.Environ(),
+		"VISION_MODEL="+q.modelName,
+		"VISION_MODEL_PATH="+q.modelPath,
+		"VISION_MODEL_VERSION="+q.modelVersion,
+		"VISION_MAX_OUTPUT_TOKENS="+fmt.Sprint(q.maxOutputTokens),
+	)
 	var stderr bytes.Buffer
 	visionLogWriter := &visionLogWriter{}
 	cmd.Stderr = io.MultiWriter(&stderr, visionLogWriter)

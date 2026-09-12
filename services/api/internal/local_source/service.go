@@ -10,17 +10,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/fsnotify/fsnotify"
 	"github.com/google/uuid"
-	"github.com/berzz26/recall/services/api/internal/video"
 )
 
 type Service struct {
-	repo            *Repository
-	videoService    *video.Service
-	stability       time.Duration
-	mu              sync.Mutex
-	watchers        map[uuid.UUID]*watcher
+	repo         *Repository
+	videoService *video.Service
+	stability    time.Duration
+	mu           sync.Mutex
+	watchers     map[uuid.UUID]*watcher
 }
 
 type watcher struct {

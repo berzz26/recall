@@ -33,11 +33,15 @@ type Config struct {
 	ModelPath              string
 	PythonPath             string
 	EventMovementThreshold float64
+	VisionProvider         string
 	VisionPythonPath       string
 	VisionModel            string
+	VisionModelPath        string
 	VisionModelVersion     string
 	VisionMaxFrames        int
+	VisionMaxOutputTokens  int
 	VisionTimeout          time.Duration
+	GeminiAPIKey           string
 	EnableVideoDescription bool
 	TrackerType            string
 	TrackerHighThreshold   float64
@@ -189,17 +193,39 @@ func Load() Config {
 		}
 	}
 
+	visionProvider := os.Getenv("VISION_PROVIDER")
+	if visionProvider == "" {
+		visionProvider = "local"
+	}
+	visionProvider = strings.ToLower(strings.TrimSpace(visionProvider))
+	if visionProvider != "local" && visionProvider != "gemini" {
+		panic(fmt.Sprintf("invalid VISION_PROVIDER %q: must be one of [local, gemini]", visionProvider))
+	}
 	visionPythonPath := os.Getenv("VISION_PYTHON_PATH")
 	if visionPythonPath == "" {
 		visionPythonPath = "python3"
 	}
+	// Default vision model depends on provider for better DX, but all values remain configurable
+	defaultVisionModel := "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
+	defaultVisionVersion := "500M-Instruct"
+	if visionProvider == "gemini" {
+		defaultVisionModel = "gemini-2.5-flash-lite"
+		defaultVisionVersion = "2.5-flash-lite"
+	}
 	visionModel := os.Getenv("VISION_MODEL")
 	if visionModel == "" {
-		visionModel = "HuggingFaceTB/SmolVLM-500M-Instruct"
+		visionModel = defaultVisionModel
+	}
+	visionModelPath := os.Getenv("VISION_MODEL_PATH")
+	if visionModelPath == "" {
+		// For local, default path mirrors model name; for gemini the path is irrelevant
+		if visionProvider == "local" {
+			visionModelPath = "/models/SmolVLM2-500M-Video-Instruct"
+		}
 	}
 	visionVersion := os.Getenv("VISION_MODEL_VERSION")
 	if visionVersion == "" {
-		visionVersion = "500M-Instruct"
+		visionVersion = defaultVisionVersion
 	}
 	visionMaxFrames := 3
 	if v := os.Getenv("VISION_MAX_FRAMES"); v != "" {
@@ -209,12 +235,37 @@ func Load() Config {
 		}
 		visionMaxFrames = parsed
 	}
+	visionMaxOutputTokens := 256
+	if v := os.Getenv("VISION_MAX_OUTPUT_TOKENS"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed < 1 {
+			panic(fmt.Sprintf("invalid VISION_MAX_OUTPUT_TOKENS %q: must be >= 1", v))
+		}
+		visionMaxOutputTokens = parsed
+	}
 	visionTimeout := 10 * time.Minute
 	if v := os.Getenv("VISION_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			visionTimeout = d
 		} else {
 			panic(fmt.Sprintf("invalid VISION_TIMEOUT %q", v))
+		}
+	}
+	geminiAPIKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+
+	// Validation: provider-specific required fields
+	if visionProvider == "gemini" && geminiAPIKey == "" {
+		panic("GEMINI_API_KEY is required when VISION_PROVIDER=gemini")
+	}
+	if visionProvider == "local" {
+		if visionModel == "" {
+			panic("VISION_MODEL is required when VISION_PROVIDER=local")
+		}
+		if visionModelPath == "" {
+			panic("VISION_MODEL_PATH is required when VISION_PROVIDER=local")
+		}
+		if visionVersion == "" {
+			panic("VISION_MODEL_VERSION is required when VISION_PROVIDER=local")
 		}
 	}
 
@@ -286,38 +337,42 @@ func Load() Config {
 	}
 
 	return Config{
-		Env:                      env,
-		Port:                     port,
-		Addr:                     ":" + port,
-		DatabaseURL:              dbURL,
-		StorageRoot:              storageRoot,
-		MaxUploadSize:            maxUploadSize,
-		StabilitySeconds:         stabilitySeconds,
-		StabilityDuration:        time.Duration(stabilitySeconds) * time.Second,
-		PollInterval:             pollInterval,
-		FFprobePath:              ffprobePath,
-		FFprobeTimeout:           ffprobeTimeout,
-		SegmentDuration:          segmentDuration,
-		FrameSampleInterval:      frameSampleInterval,
-		FFmpegPath:               ffmpegPath,
-		FFmpegTimeout:            ffmpegTimeout,
-		FrameJPEGQuality:         frameJPEGQuality,
-		DetectionThreshold:       detectionThreshold,
-		DetectorName:             detectorName,
-		DetectorVersion:          detectorVersion,
-		ModelPath:                modelPath,
-		PythonPath:               pythonPath,
-		EventMovementThreshold:   movementThreshold,
-		VisionPythonPath:         visionPythonPath,
-		VisionModel:              visionModel,
-		VisionModelVersion:       visionVersion,
-		VisionMaxFrames:          visionMaxFrames,
-		VisionTimeout:            visionTimeout,
-		EnableVideoDescription:   enableVideoDescription,
-		TrackerType:              trackerType,
-		TrackerHighThreshold:     trackerHighThreshold,
-		TrackerLowThreshold:      trackerLowThreshold,
-		TrackerMatchThreshold:    trackerMatchThreshold,
-		TrackerTrackBuffer:       trackerTrackBuffer,
+		Env:                    env,
+		Port:                   port,
+		Addr:                   ":" + port,
+		DatabaseURL:            dbURL,
+		StorageRoot:            storageRoot,
+		MaxUploadSize:          maxUploadSize,
+		StabilitySeconds:       stabilitySeconds,
+		StabilityDuration:      time.Duration(stabilitySeconds) * time.Second,
+		PollInterval:           pollInterval,
+		FFprobePath:            ffprobePath,
+		FFprobeTimeout:         ffprobeTimeout,
+		SegmentDuration:        segmentDuration,
+		FrameSampleInterval:    frameSampleInterval,
+		FFmpegPath:             ffmpegPath,
+		FFmpegTimeout:          ffmpegTimeout,
+		FrameJPEGQuality:       frameJPEGQuality,
+		DetectionThreshold:     detectionThreshold,
+		DetectorName:           detectorName,
+		DetectorVersion:        detectorVersion,
+		ModelPath:              modelPath,
+		PythonPath:             pythonPath,
+		EventMovementThreshold: movementThreshold,
+		VisionProvider:         visionProvider,
+		VisionPythonPath:       visionPythonPath,
+		VisionModel:            visionModel,
+		VisionModelPath:        visionModelPath,
+		VisionModelVersion:     visionVersion,
+		VisionMaxFrames:        visionMaxFrames,
+		VisionMaxOutputTokens:  visionMaxOutputTokens,
+		VisionTimeout:          visionTimeout,
+		GeminiAPIKey:           geminiAPIKey,
+		EnableVideoDescription: enableVideoDescription,
+		TrackerType:            trackerType,
+		TrackerHighThreshold:   trackerHighThreshold,
+		TrackerLowThreshold:    trackerLowThreshold,
+		TrackerMatchThreshold:  trackerMatchThreshold,
+		TrackerTrackBuffer:     trackerTrackBuffer,
 	}
 }

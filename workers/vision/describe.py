@@ -28,6 +28,10 @@ MODEL_PATH = os.getenv("VISION_MODEL_PATH", os.getenv("VISION_MODEL", "/models/S
 if MODEL_PATH == MODEL_NAME and "/" not in MODEL_PATH:
     MODEL_PATH = os.getenv("VISION_MODEL_PATH", "/models/SmolVLM2-500M-Video-Instruct")
 MODEL_VERSION = os.getenv("VISION_MODEL_VERSION", "500M-Instruct")
+try:
+    MAX_OUTPUT_TOKENS = int(os.getenv("VISION_MAX_OUTPUT_TOKENS", "256"))
+except Exception:
+    MAX_OUTPUT_TOKENS = 256
 
 
 INSTRUCTION = """You are describing a CCTV video segment for a video search system.
@@ -671,7 +675,7 @@ def main():
             with torch.inference_mode():
                 generated = model.generate(
                     **inputs,
-                    max_new_tokens=128,
+                    max_new_tokens=MAX_OUTPUT_TOKENS,
                     do_sample=False,
                 )
 

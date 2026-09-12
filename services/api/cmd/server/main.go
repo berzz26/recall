@@ -106,27 +106,37 @@ func main() {
 	var segmentDescService *segment_description.Service
 	var describer vision.VisionDescriber
 	if cfg.EnableVideoDescription {
-		visionScriptPath := filepath.Join("workers", "vision", "describe.py")
-		if _, err := os.Stat(visionScriptPath); err != nil {
-			if abs, err2 := filepath.Abs(visionScriptPath); err2 == nil {
-				if _, err3 := os.Stat(abs); err3 == nil {
+		switch cfg.VisionProvider {
+		case "gemini":
+			describer = vision.NewGeminiDescriber(cfg.VisionModel, cfg.VisionModelVersion, cfg.VisionMaxFrames, cfg.VisionMaxOutputTokens, cfg.VisionTimeout, cfg.GeminiAPIKey, store)
+			slog.Info("vision provider selected", "provider", "gemini", "model", cfg.VisionModel, "version", cfg.VisionModelVersion, "max_frames", cfg.VisionMaxFrames, "max_output_tokens", cfg.VisionMaxOutputTokens)
+		case "local":
+			visionScriptPath := filepath.Join("workers", "vision", "describe.py")
+			if _, err := os.Stat(visionScriptPath); err != nil {
+				if abs, err2 := filepath.Abs(visionScriptPath); err2 == nil {
+					if _, err3 := os.Stat(abs); err3 == nil {
+						visionScriptPath = abs
+					}
+				}
+				if _, err := os.Stat(visionScriptPath); err != nil {
+					alt := "/home/berzz/recall/workers/vision/describe.py"
+					if _, err2 := os.Stat(alt); err2 == nil {
+						visionScriptPath = alt
+					}
+				}
+			} else {
+				if abs, err := filepath.Abs(visionScriptPath); err == nil {
 					visionScriptPath = abs
 				}
 			}
-			if _, err := os.Stat(visionScriptPath); err != nil {
-				alt := "/home/berzz/recall/workers/vision/describe.py"
-				if _, err2 := os.Stat(alt); err2 == nil {
-					visionScriptPath = alt
-				}
-			}
-		} else {
-			if abs, err := filepath.Abs(visionScriptPath); err == nil {
-				visionScriptPath = abs
-			}
+			describer = vision.NewSmolVLMDescriberWithConfig(cfg.VisionPythonPath, visionScriptPath, cfg.VisionModel, cfg.VisionModelPath, cfg.VisionModelVersion, cfg.VisionMaxFrames, cfg.VisionMaxOutputTokens, store, cfg.VisionTimeout)
+			slog.Info("vision provider selected", "provider", "local", "model", cfg.VisionModel, "model_path", cfg.VisionModelPath, "version", cfg.VisionModelVersion, "max_frames", cfg.VisionMaxFrames, "max_output_tokens", cfg.VisionMaxOutputTokens)
+		default:
+			slog.Error("unsupported vision provider", "provider", cfg.VisionProvider)
+			os.Exit(1)
 		}
-		describer = vision.NewSmolVLMDescriber(cfg.VisionPythonPath, visionScriptPath, cfg.VisionModel, cfg.VisionModelVersion, cfg.VisionMaxFrames, store, cfg.VisionTimeout)
 		segmentDescService = segment_description.NewService(segmentDescRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, describer, cfg.VisionModel, cfg.VisionModelVersion)
-		slog.Info("video description pipeline enabled", "model", cfg.VisionModel, "version", cfg.VisionModelVersion, "max_frames", cfg.VisionMaxFrames)
+		slog.Info("video description pipeline enabled", "provider", cfg.VisionProvider, "model", cfg.VisionModel, "version", cfg.VisionModelVersion)
 	} else {
 		slog.Info("video description pipeline disabled via ENABLE_VIDEO_DESCRIPTION=false — VLM generation will be skipped")
 	}

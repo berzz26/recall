@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/berzz26/recall/pkg/database"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
+	"github.com/google/uuid"
 )
 
 func newTestDeps(t *testing.T) (*video.Service, *video_media.Service, *video_segment.Service, *database.Service, string) {
@@ -218,6 +218,8 @@ func TestSegmentServiceInvalidDurationMarksFailedViaProcessor(t *testing.T) {
 	}
 }
 
-type processorFunc struct{ fn func(context.Context, *video.Video) error }
+type processorFunc struct {
+	fn func(context.Context, *video.Video) error
+}
 
 func (p *processorFunc) Process(ctx context.Context, v *video.Video) error { return p.fn(ctx, v) }

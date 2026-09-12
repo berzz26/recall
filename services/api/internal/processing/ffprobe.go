@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/berzz26/recall/services/api/internal/segment_description"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
-	"github.com/berzz26/recall/services/api/internal/segment_description"
 	"github.com/berzz26/recall/services/api/internal/video_event"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
