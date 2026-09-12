@@ -91,8 +91,27 @@ func (s *LocalStorage) Delete(ctx context.Context, key string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	// Prune empty parent directories up to storage root
 	dir := filepath.Dir(path)
-	os.Remove(dir)
+	for {
+		if dir == s.root || dir == "." || dir == "/" {
+			break
+		}
+		// Ensure dir is inside root
+		if !strings.HasPrefix(dir, s.root) {
+			break
+		}
+		// Stop if dir is the root itself
+		if dir == s.root {
+			break
+		}
+		err := os.Remove(dir)
+		if err != nil {
+			// Directory not empty or other error — stop pruning
+			break
+		}
+		dir = filepath.Dir(dir)
+	}
 	return nil
 }
 

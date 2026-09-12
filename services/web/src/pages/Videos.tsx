@@ -47,6 +47,14 @@ export default function Videos() {
   if (loading) return <Loading />
   if (err) return <ErrorState error={err} retry={fetch} />
 
+  const onDelete = async (id: string, filename: string) => {
+    if (!confirm(`Delete video "${filename}"? This will permanently delete the video and all its frames, tracks and metadata.`)) return
+    try {
+      await client.del(`/api/v1/videos/${id}`)
+      setVideos(prev => prev.filter(v => v.id !== id))
+    } catch (e: any) { alert(`Delete failed: ${e.message}`) }
+  }
+
   const filtered = videos.filter(v => (!filterStatus || v.status === filterStatus) && (!filterSource || v.source_type === filterSource))
 
   return (
@@ -68,7 +76,7 @@ export default function Videos() {
           <button className="btn" onClick={fetch}>Refresh</button>
         </div>
         <table className="table">
-          <thead><tr><th>Filename</th><th>Source</th><th>Status</th><th>Size</th><th>Duration</th><th>Resolution</th><th>Created</th></tr></thead>
+          <thead><tr><th>Filename</th><th>Source</th><th>Status</th><th>Size</th><th>Duration</th><th>Resolution</th><th>Created</th><th>Actions</th></tr></thead>
           <tbody>
             {filtered.map(v => {
               const m = mediaMap[v.id]
@@ -81,6 +89,7 @@ export default function Videos() {
                   <td>{m?.duration_seconds ? `${m.duration_seconds.toFixed(2)}s` : '-'}</td>
                   <td>{m?.video_width && m?.video_height ? `${m.video_width}×${m.video_height}` : '-'}</td>
                   <td>{new Date(v.created_at).toLocaleString()}</td>
+                  <td><button className="btn" style={{ color: '#f87171', borderColor: '#f87171' }} onClick={() => onDelete(v.id, v.filename)}>Delete</button></td>
                 </tr>
               )
             })}

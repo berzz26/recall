@@ -337,12 +337,30 @@ func (s *Service) DeleteVideo(ctx context.Context, id uuid.UUID) error {
 		return fmt.Errorf("get video %s: %w", id.String(), err)
 	}
 
+	// Collect frame storage keys before DB cascade deletes them
+	var frameKeys []string
+	if s.storage != nil {
+		if keys, err := s.repo.ListFrameStorageKeys(ctx, id); err == nil {
+			frameKeys = keys
+		}
+	}
+
 	if err := s.repo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete video %s: %w", id.String(), err)
 	}
 
+	// Delete original video file (only for uploads — never delete user's local source file)
 	if v.SourceType == SourceTypeUpload && v.StorageKey != nil && *v.StorageKey != "" && s.storage != nil {
 		_ = s.storage.Delete(ctx, *v.StorageKey)
+	}
+
+	// Delete frame images from storage (DB rows cascade via ON DELETE CASCADE)
+	if s.storage != nil {
+		for _, k := range frameKeys {
+			_ = s.storage.Delete(ctx, k)
+		}
+		// Also try prefix delete for any stray frames (e.g., if DB already cascaded before we listed)
+		// Storage is filesystem; listing via DB is sufficient, but be defensive
 	}
 
 	return nil

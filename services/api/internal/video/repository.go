@@ -200,6 +200,23 @@ func (r *Repository) MarkFailed(ctx context.Context, id uuid.UUID, errMsg string
 	return scanVideo(row)
 }
 
+func (r *Repository) ListFrameStorageKeys(ctx context.Context, videoID uuid.UUID) ([]string, error) {
+	rows, err := r.db.Query(ctx, `SELECT storage_key FROM video_frames WHERE video_id = $1`, videoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, rows.Err()
+}
+
 func (r *Repository) Count(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM videos`).Scan(&count)

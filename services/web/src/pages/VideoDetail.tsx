@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { client } from '../api/client'
 import type { Video, MediaMetadata, Segment, Frame, Detection, Track, Event, SegmentDescription } from '../api/types'
 import { StatusBadge } from '../components/StatusBadge'
@@ -7,6 +7,7 @@ import { Loading, ErrorState } from '../components/Loading'
 
 export default function VideoDetail() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const [video, setVideo] = useState<Video | null>(null)
   const [media, setMedia] = useState<MediaMetadata | null>(null)
   const [segments, setSegments] = useState<Segment[]>([])
@@ -56,6 +57,15 @@ export default function VideoDetail() {
     return () => clearInterval(t)
   }, [video?.status])
 
+  const onDelete = async () => {
+    if (!video) return
+    if (!confirm(`Delete video "${video.filename}"? This will permanently delete the video and all its frames, tracks and metadata. This cannot be undone.`)) return
+    try {
+      await client.del(`/api/v1/videos/${video.id}`)
+      navigate('/')
+    } catch (e: any) { alert(`Delete failed: ${e.message}`) }
+  }
+
   if (err) return <ErrorState error={err} retry={fetchAll} />
   if (!video) return <Loading />
 
@@ -75,7 +85,10 @@ export default function VideoDetail() {
   return (
     <div>
       <div className="card">
-        <h3>{video.filename} <StatusBadge status={video.status} /></h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <h3 style={{ margin: 0 }}>{video.filename} <StatusBadge status={video.status} /></h3>
+          <button className="btn" style={{ color: '#f87171', borderColor: '#f87171' }} onClick={onDelete}>Delete Video</button>
+        </div>
         <dl className="kv">
           <dt>Video ID</dt><dd>{video.id}</dd>
           <dt>Source type</dt><dd>{video.source_type}</dd>
