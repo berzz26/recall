@@ -13,11 +13,13 @@ import (
 	"github.com/berzz26/recall/services/api/internal/config"
 	"github.com/berzz26/recall/services/api/internal/detection"
 	"github.com/berzz26/recall/services/api/internal/detector"
+	"github.com/berzz26/recall/services/api/internal/embedding"
 	"github.com/berzz26/recall/services/api/internal/handlers"
 	"github.com/berzz26/recall/services/api/internal/health"
 	local_source "github.com/berzz26/recall/services/api/internal/local_source"
 	"github.com/berzz26/recall/services/api/internal/processing"
 	"github.com/berzz26/recall/services/api/internal/segment_description"
+	"github.com/berzz26/recall/services/api/internal/segment_embedding"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/tracker"
 	"github.com/berzz26/recall/services/api/internal/video"
@@ -161,7 +163,23 @@ func main() {
 		slog.Warn("ffmpeg not found, frame extraction will fail", "path", cfg.FFmpegPath, "error", err)
 	}
 
-	processor := processing.NewFFprobeProcessorWithDescriptions(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService, visualService, trackService, eventService, segmentDescService)
+	// Embedding setup
+	embedRepo := segment_embedding.NewRepository(db.DB)
+	embedder := embedding.NewBGEEmbedder(cfg.EmbeddingPythonPath, "workers/embedding/embed.py", cfg.EmbeddingTimeout)
+	embedService := segment_embedding.NewService(embedRepo, segmentDescRepo, embedder, cfg.EmbeddingModel, cfg.EmbeddingModelVersion)
+	if cfg.EnableVideoDescription {
+		slog.Info("embedding provider selected", "model", cfg.EmbeddingModel, "version", cfg.EmbeddingModelVersion)
+	} else {
+		slog.Info("embedding generation will be skipped when descriptions disabled")
+	}
+	// Wire embedding into pipeline; if descriptions disabled, embedding will be skipped via nil check
+	var embedServiceForPipeline *segment_embedding.Service
+	if cfg.EnableVideoDescription {
+		embedServiceForPipeline = embedService
+	}
+
+	processor := processing.NewFFprobeProcessorWithEmbeddings(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService, visualService, trackService, eventService, segmentDescService, embedServiceForPipeline)
+	searchHandler := handlers.NewSearchHandler(embedder, embedRepo)
 	worker := processing.NewWorker(videoService, processor, cfg.PollInterval)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	go worker.Start(workerCtx)
@@ -208,6 +226,7 @@ func main() {
 	v1.Get("/videos/:id/segments/:segmentId/description", detailHandler.GetSegmentDescription)
 	v1.Post("/ingest/local", videoHandler.IngestLocal)
 	v1.Mount("/local-sources", localSourceHandler.SetupRoutes())
+	v1.Post("/search/semantic", searchHandler.Search)
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

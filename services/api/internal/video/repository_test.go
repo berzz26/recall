@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/berzz26/recall/pkg/database"
+	"github.com/google/uuid"
 )
 
 func newTestRepo(t *testing.T) *Repository {

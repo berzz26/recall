@@ -42,6 +42,10 @@ type Config struct {
 	VisionMaxOutputTokens  int
 	VisionTimeout          time.Duration
 	GeminiAPIKey           string
+	EmbeddingPythonPath    string
+	EmbeddingModel         string
+	EmbeddingModelVersion  string
+	EmbeddingTimeout       time.Duration
 	EnableVideoDescription bool
 	TrackerType            string
 	TrackerHighThreshold   float64
@@ -269,6 +273,27 @@ func Load() Config {
 		}
 	}
 
+	embeddingPythonPath := os.Getenv("EMBEDDING_PYTHON_PATH")
+	if embeddingPythonPath == "" {
+		embeddingPythonPath = "python3"
+	}
+	embeddingModel := os.Getenv("EMBEDDING_MODEL")
+	if embeddingModel == "" {
+		embeddingModel = "BAAI/bge-small-en-v1.5"
+	}
+	embeddingModelVersion := os.Getenv("EMBEDDING_MODEL_VERSION")
+	if embeddingModelVersion == "" {
+		embeddingModelVersion = "v1.5"
+	}
+	embeddingTimeout := 5 * time.Minute
+	if v := os.Getenv("EMBEDDING_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			embeddingTimeout = d
+		} else {
+			panic(fmt.Sprintf("invalid EMBEDDING_TIMEOUT %q", v))
+		}
+	}
+
 	enableVideoDescription := true
 	// Primary toggle: ENABLE_VIDEO_DESCRIPTION, aliases: ENABLE_VLM, VISION_ENABLED, ENABLE_DESCRIPTION
 	for _, key := range []string{"ENABLE_VIDEO_DESCRIPTION", "ENABLE_VLM", "VISION_ENABLED", "ENABLE_DESCRIPTION"} {
@@ -368,6 +393,10 @@ func Load() Config {
 		VisionMaxOutputTokens:  visionMaxOutputTokens,
 		VisionTimeout:          visionTimeout,
 		GeminiAPIKey:           geminiAPIKey,
+		EmbeddingPythonPath:    embeddingPythonPath,
+		EmbeddingModel:         embeddingModel,
+		EmbeddingModelVersion:  embeddingModelVersion,
+		EmbeddingTimeout:       embeddingTimeout,
 		EnableVideoDescription: enableVideoDescription,
 		TrackerType:            trackerType,
 		TrackerHighThreshold:   trackerHighThreshold,

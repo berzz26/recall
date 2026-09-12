@@ -8,7 +8,7 @@ import (
 )
 
 type IoUTracker struct {
-	IouThreshold float64
+	IouThreshold  float64
 	MaxGapSeconds float64
 }
 
@@ -41,8 +41,18 @@ func iou(a, b DetectionInput) float64 {
 	return inter / union
 }
 
-func max(a, b float64) float64 { if a > b { return a }; return b }
-func min(a, b float64) float64 { if a < b { return a }; return b }
+func max(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+func min(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 type activeTrack struct {
 	TrackIndex int

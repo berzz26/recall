@@ -1,12 +1,12 @@
 package video
 
 type CreateVideoRequest struct {
-	Filename    string     `json:"filename"`
-	ContentHash *string    `json:"content_hash"`
-	MimeType    *string    `json:"mime_type"`
-	SizeBytes   *int64     `json:"size_bytes"`
+	Filename    string      `json:"filename"`
+	ContentHash *string     `json:"content_hash"`
+	MimeType    *string     `json:"mime_type"`
+	SizeBytes   *int64      `json:"size_bytes"`
 	SourceType  *SourceType `json:"source_type"`
-	SourcePath  *string    `json:"source_path"`
+	SourcePath  *string     `json:"source_path"`
 }
 
 type VideoResponse struct {

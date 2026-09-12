@@ -7,23 +7,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/berzz26/recall/services/api/internal/detection"
 	"github.com/berzz26/recall/services/api/internal/video_event"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
 	"github.com/berzz26/recall/services/api/internal/video_track"
 	"github.com/berzz26/recall/services/api/internal/vision"
+	"github.com/google/uuid"
 )
 
 type Service struct {
-	repo             *Repository
-	segmentRepo      *video_segment.Repository
-	frameRepo        *video_frame.Repository
-	detectionRepo    *detection.Repository
-	trackRepo        *video_track.Repository
-	eventRepo        *video_event.Repository
-	describer        vision.VisionDescriber
+	repo                 *Repository
+	segmentRepo          *video_segment.Repository
+	frameRepo            *video_frame.Repository
+	detectionRepo        *detection.Repository
+	trackRepo            *video_track.Repository
+	eventRepo            *video_event.Repository
+	describer            vision.VisionDescriber
 	expectedModelName    string
 	expectedModelVersion string
 }
@@ -163,7 +163,7 @@ func (s *Service) GenerateForVideo(ctx context.Context, videoID uuid.UUID) ([]De
 		descs = append(descs, Description{
 			VideoID: videoID, SegmentID: seg.ID,
 			Description: desc,
-			ModelName: r.ModelName, ModelVersion: r.ModelVersion,
+			ModelName:   r.ModelName, ModelVersion: r.ModelVersion,
 		})
 	}
 

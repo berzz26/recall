@@ -21,6 +21,8 @@ export default function VideoDetail() {
   const [descriptions, setDescriptions] = useState<SegmentDescription[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [selectedFrame, setSelectedFrame] = useState<Frame | null>(null)
+  const [tracksCollapsed, setTracksCollapsed] = useState(false)
+  const [eventsCollapsed, setEventsCollapsed] = useState(false)
 
   const fetchAll = async () => {
     if (!id) return
@@ -140,8 +142,19 @@ export default function VideoDetail() {
       </div>
 
       <div className="card">
-        <h3>Tracks ({tracks.length})</h3>
-        {tracks.length === 0 ? <div className="empty">No tracks</div> : (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: tracksCollapsed ? 0 : 12 }}>
+          <h3 style={{ margin: 0 }}>Tracks ({tracks.length})</h3>
+          <button
+            aria-label={tracksCollapsed ? 'Expand tracks' : 'Collapse tracks'}
+            onClick={() => setTracksCollapsed(v => !v)}
+            style={{ background: 'transparent', border: '1px solid #2a2e39', borderRadius: 6, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#9aa0b0', flexShrink: 0 }}
+            title={tracksCollapsed ? 'Expand' : 'Collapse'}
+          >
+            <span style={{ display: 'inline-block', transform: tracksCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', fontSize: 12, lineHeight: 1 }}>{tracksCollapsed ? '▶' : '▼'}</span>
+          </button>
+        </div>
+        {!tracksCollapsed && (
+          tracks.length === 0 ? <div className="empty">No tracks</div> : (
           <>
             <div style={{ marginBottom: 12 }}>
               <select
@@ -158,7 +171,7 @@ export default function VideoDetail() {
               </select>
             </div>
             {selectedTrack === 'all' ? (
-              <div className="summary" style={{ flexDirection: 'column', gap: 8 }}>
+              <div className="summary" style={{ flexDirection: 'column', gap: 8, maxHeight: 260, overflowY: 'auto', paddingRight: 4 }}>
                 {tracks.map(t => (
                   <div key={t.id} className="item" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                     <span style={{ minWidth: 80, fontWeight: 700, textTransform: 'uppercase' }}>{t.label}</span>
@@ -185,11 +198,23 @@ export default function VideoDetail() {
               })()
             )}
           </>
-        )}
+        ))}
       </div>
 
       <div className="card">
-        <h3>Events ({events.length})</h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: eventsCollapsed ? 0 : 12 }}>
+          <h3 style={{ margin: 0 }}>Events ({events.length})</h3>
+          <button
+            aria-label={eventsCollapsed ? 'Expand events' : 'Collapse events'}
+            onClick={() => setEventsCollapsed(v => !v)}
+            style={{ background: 'transparent', border: '1px solid #2a2e39', borderRadius: 6, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#9aa0b0', flexShrink: 0 }}
+            title={eventsCollapsed ? 'Expand' : 'Collapse'}
+          >
+            <span style={{ display: 'inline-block', transform: eventsCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', fontSize: 12, lineHeight: 1 }}>{eventsCollapsed ? '▶' : '▼'}</span>
+          </button>
+        </div>
+        {!eventsCollapsed && (
+          <>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
           <select value={eventFilter} onChange={e => setEventFilter(e.target.value)} style={{ padding: '6px 8px' }}>
             <option value="all">All events</option>
@@ -250,6 +275,8 @@ export default function VideoDetail() {
           </tbody>
         </table>
         {events.length === 0 && <div className="empty">No events</div>}
+          </>
+        )}
       </div>
 
       <div className="card">

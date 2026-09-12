@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/berzz26/recall/services/api/internal/segment_description"
+	"github.com/berzz26/recall/services/api/internal/segment_embedding"
 	"github.com/berzz26/recall/services/api/internal/storage"
 	"github.com/berzz26/recall/services/api/internal/video"
 	"github.com/berzz26/recall/services/api/internal/video_event"
@@ -35,6 +36,7 @@ type FFprobeProcessor struct {
 	trackService   *video_track.Service
 	eventService   *video_event.Service
 	descService    *segment_description.Service
+	embedService   *segment_embedding.Service
 }
 
 func NewFFprobeProcessor(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service) *FFprobeProcessor {
@@ -100,6 +102,12 @@ func NewFFprobeProcessorWithDescriptions(ffprobePath string, timeout time.Durati
 	p.trackService = trackService
 	p.eventService = eventService
 	p.descService = descService
+	return p
+}
+
+func NewFFprobeProcessorWithEmbeddings(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service, segmentService *video_segment.Service, frameService *video_frame.Service, visualService *visual.Service, trackService *video_track.Service, eventService *video_event.Service, descService *segment_description.Service, embedService *segment_embedding.Service) *FFprobeProcessor {
+	p := NewFFprobeProcessorWithDescriptions(ffprobePath, timeout, store, mediaService, segmentService, frameService, visualService, trackService, eventService, descService)
+	p.embedService = embedService
 	return p
 }
 
@@ -424,6 +432,19 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 		slog.Info("pipeline: VLM generation complete", "video_id", v.ID.String(), "duration_ms", vlmMs)
 	} else {
 		slog.Info("pipeline: VLM generation skipped (disabled)", "video_id", v.ID.String())
+	}
+
+	if p.embedService != nil {
+		embedStart := time.Now()
+		slog.Info("pipeline: embedding generation start", "video_id", v.ID.String())
+		if _, err := p.embedService.GenerateForVideo(ctx, v.ID); err != nil {
+			slog.Error("pipeline: embedding generation failed", "video_id", v.ID.String(), "duration_ms", time.Since(embedStart).Milliseconds(), "error", err)
+			return fmt.Errorf("failed to generate embeddings: %w", err)
+		}
+		embedMs := time.Since(embedStart).Milliseconds()
+		slog.Info("pipeline: embedding generation complete", "video_id", v.ID.String(), "duration_ms", embedMs)
+	} else {
+		slog.Info("pipeline: embedding generation skipped", "video_id", v.ID.String())
 	}
 
 	totalMs := time.Since(pipelineStart).Milliseconds()
