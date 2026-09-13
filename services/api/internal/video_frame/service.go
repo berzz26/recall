@@ -27,6 +27,14 @@ type Service struct {
 	storage        storage.Storage
 	sampleInterval time.Duration
 	ffmpegPath     string
+	// ffmpegTimeout is retained for compatibility (FFMPEG_TIMEOUT env).
+	// A.2 semantics: FFMPEG_TIMEOUT is the maximum allowed duration of an
+	// individual FFmpeg subprocess before cancellation, NOT a whole-video
+	// wall-clock limit. The processing job lifetime is controlled by the
+	// parent processing context (worker/application) and may run arbitrarily
+	// long for long videos. To avoid killing legitimate long extractions,
+	// GenerateForVideo does not impose a fixed 60s wall-clock timeout over
+	// the entire extraction.
 	ffmpegTimeout  time.Duration
 	jpegQuality    int
 }
@@ -222,11 +230,11 @@ func (s *Service) GenerateForVideo(ctx context.Context, v *video.Video, segments
 		"pipe:1",
 	}
 
-	// Single FFmpeg process with timeout covering entire extraction (Phase A.1 keeps existing timeout behavior)
-	extractCtx, cancel := context.WithTimeout(ctx, s.ffmpegTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(extractCtx, s.ffmpegPath, args...)
+	// FFmpeg subprocess is supervised by the parent processing context.
+	// FFMPEG_TIMEOUT is no longer used as a whole-video wall-clock timeout.
+	// The extraction may run arbitrarily long for long videos; cancellation
+	// propagates from ctx (worker shutdown / application cancellation).
+	cmd := exec.CommandContext(ctx, s.ffmpegPath, args...)
 	// Separate stderr, stdout is JPEG stream
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &limitedWriter{buf: &stderrBuf, limit: 8192}
@@ -381,12 +389,9 @@ loopRead:
 			if readErr == io.EOF {
 				break
 			}
-			// Check context
-			if extractCtx.Err() != nil || ctx.Err() != nil {
-				readErrOuter = extractCtx.Err()
-				if readErrOuter == nil {
-					readErrOuter = ctx.Err()
-				}
+			// Check parent context cancellation (A.2: processing lifetime controls FFmpeg)
+			if ctx.Err() != nil {
+				readErrOuter = ctx.Err()
 				break
 			}
 			readErrOuter = readErr
@@ -401,9 +406,13 @@ loopRead:
 	// Handle read outer error before checking ffmpeg exit
 	if readErrOuter != nil {
 		cleanupOnFail()
-		if extractCtx.Err() == context.DeadlineExceeded {
-			slog.Error("frame: ffmpeg timeout", "video_id", v.ID.String(), "duration_ms", ffmpegMs, "error", extractCtx.Err())
-			return nil, fmt.Errorf("ffmpeg timeout: %w", extractCtx.Err())
+		if ctx.Err() == context.DeadlineExceeded {
+			slog.Error("frame: ffmpeg timeout", "video_id", v.ID.String(), "duration_ms", ffmpegMs, "error", ctx.Err())
+			return nil, fmt.Errorf("ffmpeg timeout: %w", ctx.Err())
+		}
+		if ctx.Err() == context.Canceled {
+			slog.Error("frame: context canceled", "video_id", v.ID.String(), "duration_ms", ffmpegMs, "error", ctx.Err())
+			return nil, fmt.Errorf("context canceled: %w", ctx.Err())
 		}
 		// If ffmpeg also failed, include stderr
 		if waitErr != nil {
@@ -430,9 +439,13 @@ loopRead:
 		if msg == "" {
 			msg = waitErr.Error()
 		}
-		if extractCtx.Err() == context.DeadlineExceeded {
-			slog.Error("frame: ffmpeg timeout", "video_id", v.ID.String(), "duration_ms", ffmpegMs, "error", extractCtx.Err())
-			return nil, fmt.Errorf("ffmpeg timeout: %w", extractCtx.Err())
+		if ctx.Err() == context.DeadlineExceeded {
+			slog.Error("frame: ffmpeg timeout", "video_id", v.ID.String(), "duration_ms", ffmpegMs, "error", ctx.Err())
+			return nil, fmt.Errorf("ffmpeg timeout: %w", ctx.Err())
+		}
+		if ctx.Err() == context.Canceled {
+			slog.Error("frame: context canceled", "video_id", v.ID.String(), "duration_ms", ffmpegMs, "error", ctx.Err())
+			return nil, fmt.Errorf("context canceled: %w", ctx.Err())
 		}
 		slog.Error("frame: ffmpeg failed", "video_id", v.ID.String(), "duration_ms", ffmpegMs, "error", msg)
 		return nil, fmt.Errorf("ffmpeg failed: %s", msg)
