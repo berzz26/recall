@@ -28,6 +28,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
+	"github.com/berzz26/recall/services/api/internal/video_processing_checkpoint"
 	"github.com/berzz26/recall/services/api/internal/video_track"
 	"github.com/berzz26/recall/services/api/internal/vision"
 	"github.com/berzz26/recall/services/api/internal/visual"
@@ -179,7 +180,8 @@ func main() {
 		embedServiceForPipeline = embedService
 	}
 
-	processor := processing.NewFFprobeProcessorWithEmbeddings(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService, visualService, trackService, eventService, segmentDescService, embedServiceForPipeline)
+	checkpointRepo := video_processing_checkpoint.NewRepository(db.DB)
+	processor := processing.NewFFprobeProcessorWithCheckpoints(cfg.FFprobePath, cfg.FFprobeTimeout, store, videoMediaService, videoSegmentService, videoFrameService, visualService, trackService, eventService, segmentDescService, embedServiceForPipeline, checkpointRepo)
 	searchHandler := handlers.NewSearchHandler(embedder, embedRepo)
 	searchService := search.NewService(embedder, embedRepo, db.DB, videoRepo, cfg.SearchCandidateLimit, cfg.SearchDefaultLimit, cfg.SearchMaxLimit, cfg.SearchMinSimilarity)
 	unifiedSearchHandler := handlers.NewUnifiedSearchHandler(searchService)

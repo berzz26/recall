@@ -53,6 +53,32 @@ func (r *Repository) DeleteByVideoID(ctx context.Context, videoID uuid.UUID) err
 	return err
 }
 
+func (r *Repository) GetBySegmentID(ctx context.Context, segmentID uuid.UUID) ([]VideoFrame, error) {
+	query := fmt.Sprintf(`SELECT %s FROM video_frames WHERE segment_id = $1 ORDER BY frame_index ASC`, fields)
+	rows, err := r.db.Query(ctx, query, segmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []VideoFrame
+	for rows.Next() {
+		f, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, *f)
+	}
+	if list == nil {
+		list = []VideoFrame{}
+	}
+	return list, rows.Err()
+}
+
+func (r *Repository) DeleteBySegmentID(ctx context.Context, segmentID uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `DELETE FROM video_frames WHERE segment_id = $1`, segmentID)
+	return err
+}
+
 func (r *Repository) CreateBatch(ctx context.Context, frames []VideoFrame) ([]VideoFrame, error) {
 	if len(frames) == 0 {
 		return []VideoFrame{}, nil
