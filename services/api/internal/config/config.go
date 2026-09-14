@@ -43,6 +43,8 @@ type Config struct {
 	VisionMaxFrames        int
 	VisionMaxOutputTokens  int
 	VisionTimeout          time.Duration
+	VisionHistorySegments  int
+	VisionHistoryEvents    int
 	GeminiAPIKey           string
 	EmbeddingPythonPath    string
 	EmbeddingModel         string
@@ -306,6 +308,29 @@ func Load() Config {
 			panic(fmt.Sprintf("invalid VISION_TIMEOUT %q", v))
 		}
 	}
+	visionHistorySegments := 2
+	if v := os.Getenv("VISION_HISTORY_SEGMENTS"); v != "" {
+		parsed, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			panic(fmt.Sprintf("invalid VISION_HISTORY_SEGMENTS %q: %v", v, err))
+		}
+		if parsed < 0 {
+			panic(fmt.Sprintf("VISION_HISTORY_SEGMENTS must be >= 0, got %s", v))
+		}
+		visionHistorySegments = parsed
+	}
+	visionHistoryEvents := 5
+	if v := os.Getenv("VISION_HISTORY_EVENTS"); v != "" {
+		parsed, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			panic(fmt.Sprintf("invalid VISION_HISTORY_EVENTS %q: %v", v, err))
+		}
+		if parsed < 0 {
+			panic(fmt.Sprintf("VISION_HISTORY_EVENTS must be >= 0, got %s", v))
+		}
+		visionHistoryEvents = parsed
+	}
+
 	geminiAPIKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
 
 	// Validation: provider-specific required fields
@@ -510,6 +535,8 @@ func Load() Config {
 		VisionMaxFrames:        visionMaxFrames,
 		VisionMaxOutputTokens:  visionMaxOutputTokens,
 		VisionTimeout:          visionTimeout,
+		VisionHistorySegments:  visionHistorySegments,
+		VisionHistoryEvents:    visionHistoryEvents,
 		GeminiAPIKey:           geminiAPIKey,
 		EmbeddingPythonPath:    embeddingPythonPath,
 		EmbeddingModel:         embeddingModel,

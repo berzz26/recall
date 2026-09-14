@@ -139,8 +139,8 @@ func main() {
 			slog.Error("unsupported vision provider", "provider", cfg.VisionProvider)
 			os.Exit(1)
 		}
-		segmentDescService = segment_description.NewService(segmentDescRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, describer, cfg.VisionModel, cfg.VisionModelVersion)
-		slog.Info("video description pipeline enabled", "provider", cfg.VisionProvider, "model", cfg.VisionModel, "version", cfg.VisionModelVersion)
+		segmentDescService = segment_description.NewServiceWithHistory(segmentDescRepo, videoSegmentRepo, videoFrameRepo, detectionRepo, trackRepo, eventRepo, describer, cfg.VisionModel, cfg.VisionModelVersion, cfg.VisionHistorySegments, cfg.VisionHistoryEvents)
+		slog.Info("video description pipeline enabled", "provider", cfg.VisionProvider, "model", cfg.VisionModel, "version", cfg.VisionModelVersion, "history_segments", cfg.VisionHistorySegments, "history_events", cfg.VisionHistoryEvents)
 	} else {
 		slog.Info("video description pipeline disabled via ENABLE_VIDEO_DESCRIPTION=false — VLM generation will be skipped")
 	}

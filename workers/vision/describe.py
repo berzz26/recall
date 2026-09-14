@@ -34,41 +34,33 @@ except Exception:
     MAX_OUTPUT_TOKENS = 256
 
 
-INSTRUCTION = """You are describing a CCTV video segment for a video search system.
+INSTRUCTION = """Generate a concise semantic description optimized for video retrieval for this CCTV video segment.
 
-The supplied images are chronological representative frames from one
-continuous video segment.
+The supplied images are chronological representative frames from one continuous video segment.
+You also receive bounded structured context: current detections/tracks/events for this segment, plus bounded temporal context (recent prior segment summaries, persistent tracks active before this segment, and recent prior events). This temporal context is CONTEXT FOR YOU to understand continuity — do NOT repeat it verbatim, do NOT list tracks/events, and do NOT expose track IDs, detector labels, confidence scores, or internal metadata in your answer. Use it only to determine whether an entity is continuing from a previous segment.
 
-Describe what is visibly happening across the segment.
+The images are the primary evidence. Structured detector, tracking, and event metadata is supplemental context only. It may be incomplete or incorrect. Do not make a claim merely because metadata says something exists. Verify visual claims against the images.
 
-The images are the primary evidence.
+Describe in natural language as one concise paragraph, approximately 50-100 words, no bullets, no JSON, no frame-by-frame list. Return only the description.
 
-Structured detector, tracking, and event metadata is supplemental
-context only. It may be incomplete or incorrect. Do not make a claim
-merely because metadata says something exists. Verify visual claims
-against the images.
+Content to cover when visibly supported and useful for retrieval:
+- Scene/context: what kind of environment/scene is visible, important objects/vehicles/people.
+- Salient entities: describe visually meaningful people/objects when relevant, including useful visible attributes (clothing, color, carried objects, approximate location) and where they are in the scene.
+- Activities/actions: what important entities are visibly doing, including meaningful interactions or actions.
+- Temporal change: meaningful movement, appearance, disappearance, or state changes across the supplied frames.
+- Cross-segment continuity: when tracking indicates the same entity continues from a previous segment AND the frames are visually consistent, use natural continuity language such as "the same person continues..." or "the person in the blue jacket moves..." Do NOT mention track IDs.
 
 Rules:
 - Describe only visible evidence.
-- Do not identify people.
-- Do not infer names or identities.
-- Do not infer intentions or motives.
-- Do not invent actions that are not visually supported.
-- Do not speculate about why something is happening.
+- Prioritize salient entities and actions useful for semantic retrieval. Do NOT force every detected person/track into the paragraph.
+- Do not identify real people or infer identities, names, intentions, or motives.
+- Do not invent actions that are not visually supported and do not speculate about why something is happening.
 - Use neutral language.
-- Mention important objects, people, vehicles, and scene activity.
-- Describe meaningful movement or changes across the supplied frames.
-- If people are present, describe their visible activity without
-  identifying them.
-- Do not mention detector confidence scores.
-- Do not mention track IDs.
-- Do not mention internal metadata.
-- Do not mention that you are an AI.
-- Do not say that something is present if it is not visually supported.
 - If the scene is static, describe the visible scene concisely.
-- Do not produce a frame-by-frame list.
-- Produce one concise paragraph.
-- Maximum 100 words.
+- Do not say that something is present if it is not visually supported.
+- Do not mention detector confidence scores, track IDs, detector labels unless naturally useful, or internal implementation details.
+- Do not mention that you are an AI.
+- One paragraph, approximately 50-100 words. Maximum 100 words.
 
 Return only the description."""
 
@@ -117,6 +109,13 @@ def parse_args():
 def build_context(seg):
     lines = []
 
+    seg_start = float(seg.get("start_time", 0.0) or 0.0)
+    seg_end = float(seg.get("end_time", 0.0) or 0.0)
+    seg_dur = seg_end - seg_start if seg_end >= seg_start else 0.0
+    lines.append(
+        "Current segment time: %.1fs to %.1fs (%.1fs duration)" % (seg_start, seg_end, seg_dur)
+    )
+
     dets = seg.get("detections", []) or []
 
     if dets:
@@ -142,21 +141,43 @@ def build_context(seg):
         )
 
     tracks = seg.get("tracks", []) or []
+    history = seg.get("history") or {}
+    persistent = history.get("persistent_tracks") or []
 
     if tracks:
         lines.append(
             "Tracks overlapping this segment "
-            "(label, relative start, relative end):"
+            "(label, track_index, absolute start, absolute end, duration, continuity):"
         )
 
+        # Build quick lookup for persistent
+        pers_set = {
+            (str(p.get("label")), int(p.get("track_index", -1)))
+            for p in persistent
+            if p.get("label") is not None
+        }
+        # Need also start time for persistent display
+        pers_start_map = {
+            (str(p.get("label")), int(p.get("track_index", -1))): float(p.get("start", 0.0) or 0.0)
+            for p in persistent
+        }
+
         for t in tracks:
+            label = str(t.get("label", "?"))
+            idx = int(t.get("track_index", -1))
+            s = float(t.get("start", 0.0) or 0.0)
+            e = float(t.get("end", 0.0) or 0.0)
+            dur = e - s if e >= s else 0.0
+            continuity = "new in this segment"
+            key = (label, idx)
+            if key in pers_set:
+                # check persistent start < seg_start
+                ps = pers_start_map.get(key, s)
+                if ps < seg_start - 1e-6:
+                    continuity = "continuing from %.1fs" % ps
             lines.append(
-                "- %s, %.1fs to %.1fs"
-                % (
-                    t.get("label", "?"),
-                    float(t.get("start", 0.0)),
-                    float(t.get("end", 0.0)),
-                )
+                "- %s track %d, %.1fs to %.1fs (%.1fs), %s"
+                % (label, idx, s, e, dur, continuity)
             )
     else:
         lines.append(
@@ -168,7 +189,7 @@ def build_context(seg):
     if events:
         lines.append(
             "Events in this segment "
-            "(type, label, start, end):"
+            "(type, label, absolute start, end):"
         )
 
         for e in events:
@@ -193,6 +214,94 @@ def build_context(seg):
         lines.append(
             "Events in this segment: none"
         )
+
+    # Temporal history: prior segments, persistent tracks, prior events
+    if history:
+        prior_segments = history.get("prior_segments") or []
+        if prior_segments:
+            lines.append(
+                "Temporal history: %d prior segment(s) before %.1fs:" % (len(prior_segments), seg_start)
+            )
+            for ps in prior_segments:
+                p_idx = ps.get("segment_index", "?")
+                p_s = float(ps.get("start_time", 0.0) or 0.0)
+                p_e = float(ps.get("end_time", 0.0) or 0.0)
+                p_labels = ps.get("labels") or []
+                lab_str = ", ".join(str(x) for x in p_labels) if p_labels else "none"
+                p_tracks = ps.get("tracks") or []
+                p_events = ps.get("events") or []
+                lines.append(
+                    "- Prior segment %s (%.1fs-%.1fs): labels [%s], %d track(s), %d event(s)"
+                    % (p_idx, p_s, p_e, lab_str, len(p_tracks), len(p_events))
+                )
+                for pt in p_tracks:
+                    lines.append(
+                        "  * track %s %s: %.1fs-%.1fs"
+                        % (
+                            pt.get("label", "?"),
+                            pt.get("track_index", "?"),
+                            float(pt.get("start", 0.0) or 0.0),
+                            float(pt.get("end", 0.0) or 0.0),
+                        )
+                    )
+                for pe in p_events:
+                    pe_end = pe.get("end")
+                    pe_end_s = "none" if pe_end is None else "%.1fs" % float(pe_end)
+                    lines.append(
+                        "  * event %s %s: %.1fs to %s"
+                        % (
+                            pe.get("event_type", "?"),
+                            pe.get("label", "?"),
+                            float(pe.get("start", 0.0) or 0.0),
+                            pe_end_s,
+                        )
+                    )
+        else:
+            lines.append(
+                "Temporal history: no prior segments (this is the first segment)"
+            )
+
+        if persistent:
+            lines.append(
+                "Persistent tracks active before this segment (%d):" % len(persistent)
+            )
+            for pt in persistent:
+                lines.append(
+                    "- %s track %s, %.1fs to %.1fs (%.1fs)"
+                    % (
+                        pt.get("label", "?"),
+                        pt.get("track_index", "?"),
+                        float(pt.get("start", 0.0) or 0.0),
+                        float(pt.get("end", 0.0) or 0.0),
+                        float(pt.get("end", 0.0) or 0.0) - float(pt.get("start", 0.0) or 0.0),
+                    )
+                )
+        else:
+            lines.append(
+                "Persistent tracks before this segment: none"
+            )
+
+        prior_events = history.get("prior_events") or []
+        if prior_events:
+            lines.append(
+                "Prior events before this segment (%d):" % len(prior_events)
+            )
+            for pe in prior_events:
+                pe_end = pe.get("end")
+                pe_end_s = "none" if pe_end is None else "%.1fs" % float(pe_end)
+                lines.append(
+                    "- %s %s: %.1fs to %s"
+                    % (
+                        pe.get("event_type", "?"),
+                        pe.get("label", "?"),
+                        float(pe.get("start", 0.0) or 0.0),
+                        pe_end_s,
+                    )
+                )
+        else:
+            lines.append(
+                "Prior events before this segment: none"
+            )
 
     append_block = (
         "\nStructured context (compact):\n"

@@ -48,6 +48,22 @@ type EventInput struct {
 	End       *float64
 }
 
+type HistorySegment struct {
+	SegmentID    uuid.UUID   `json:"segment_id"`
+	SegmentIndex int         `json:"segment_index"`
+	StartTime    float64     `json:"start_time"`
+	EndTime      float64     `json:"end_time"`
+	Labels       []string    `json:"labels"`
+	Tracks       []TrackInput `json:"tracks"`
+	Events       []EventInput `json:"events"`
+}
+
+type SegmentHistory struct {
+	PriorSegments    []HistorySegment `json:"prior_segments"`
+	PersistentTracks []TrackInput     `json:"persistent_tracks"`
+	PriorEvents      []EventInput     `json:"prior_events"`
+}
+
 type SegmentInput struct {
 	SegmentID  uuid.UUID
 	StartTime  float64
@@ -56,6 +72,7 @@ type SegmentInput struct {
 	Detections []DetectionInput
 	Tracks     []TrackInput
 	Events     []EventInput
+	History    *SegmentHistory `json:"history,omitempty"`
 }
 
 type VideoDescriptionInput struct {
