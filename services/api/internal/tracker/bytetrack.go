@@ -2,54 +2,460 @@ package tracker
 
 import (
 	"context"
+	"math"
 	"sort"
 
 	"github.com/google/uuid"
 )
 
 // ByteTrack implements the ByteTrack two-stage association in pure Go.
-// See spec: high/low split, Hungarian assignment with IoU threshold, label-aware matching,
-// frame-based lifecycle with TRACKER_TRACK_BUFFER.
+// High/low split, Kalman prediction, Hungarian assignment, label-aware matching,
+// Tracked/Lost/Removed lifecycle with time-based buffer and MinHits confirmation.
 type ByteTrack struct {
 	HighThreshold  float64
 	LowThreshold   float64
 	MatchThreshold float64
 	TrackBuffer    int
+	FuseScore      bool
+	MinHits        int
+	BufferSeconds  float64
 }
 
-func NewByteTrack(high, low, match float64, buffer int) *ByteTrack {
+func NewByteTrack(high, low, match float64, buffer int, fuseScore bool, minHits int) *ByteTrack {
+	if minHits < 1 {
+		minHits = 2
+	}
 	return &ByteTrack{
 		HighThreshold:  high,
 		LowThreshold:   low,
 		MatchThreshold: match,
 		TrackBuffer:    buffer,
+		FuseScore:      fuseScore,
+		MinHits:        minHits,
+		BufferSeconds:  float64(buffer) / 30.0,
 	}
 }
 
 func (t *ByteTrack) Name() string    { return "bytetrack" }
-func (t *ByteTrack) Version() string { return "1" }
+func (t *ByteTrack) Version() string { return "2" }
+
+// TrackState represents ByteTrack track lifecycle.
+type TrackState int
+
+const (
+	StateNew TrackState = iota
+	StateTracked
+	StateLost
+	StateRemoved
+)
 
 type btTrack struct {
-	Index         int
-	Label         string
-	BBox          DetectionInput
-	LastTimestamp float64
-	Misses        int
-	Age           int
+	Index              int
+	Label              string
+	State              TrackState
+	Mean               [8]float64
+	Cov                [8][8]float64
+	LastBBox           DetectionInput // last observed bbox (for fallback if Kalman not yet)
+	PredictedBBox      DetectionInput // predicted bbox for association (derived from Mean)
+	Age                int
+	Hits               int
+	Misses             int
+	StartTimestamp     float64
+	LastTimestamp      float64
+	LastMatchedTime    float64
+	HitCount           int // number of successful observations
+}
+
+// Kalman helpers
+
+const (
+	stdWeightPosition = 1.0 / 20.0
+	stdWeightVelocity = 1.0 / 160.0
+)
+
+// tlwhToXyah converts normalized xywh to [cx, cy, a, h]
+func tlwhToXyah(b DetectionInput) [4]float64 {
+	cx := b.BBoxX + b.BBoxWidth/2
+	cy := b.BBoxY + b.BBoxHeight/2
+	h := b.BBoxHeight
+	a := 1.0
+	if h > 1e-6 {
+		a = b.BBoxWidth / h
+	}
+	return [4]float64{cx, cy, a, h}
+}
+
+// xyahToTLWH converts Kalman state [cx,cy,a,h] to normalized xywh DetectionInput (for IoU)
+func xyahToTLWH(mean [8]float64, label string) DetectionInput {
+	cx, cy, a, h := mean[0], mean[1], mean[2], mean[3]
+	if h < 1e-6 {
+		h = 1e-6
+	}
+	w := a * h
+	x := cx - w/2
+	y := cy - h/2
+	// Clamp to [0,1] for IoU stability
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	if w < 0 {
+		w = 0
+	}
+	if h < 0 {
+		h = 0
+	}
+	if x+w > 1 {
+		w = 1 - x
+	}
+	if y+h > 1 {
+		h = 1 - y
+	}
+	return DetectionInput{BBoxX: x, BBoxY: y, BBoxWidth: w, BBoxHeight: h, Label: label}
+}
+
+func kalmanInitiate(z [4]float64) ([8]float64, [8][8]float64) {
+	var mean [8]float64
+	mean[0] = z[0]
+	mean[1] = z[1]
+	mean[2] = z[2]
+	mean[3] = z[3]
+	// velocities 0
+	h := z[3]
+	if h < 1e-6 {
+		h = 1e-6
+	}
+	std := [8]float64{
+		2 * stdWeightPosition * h,
+		2 * stdWeightPosition * h,
+		1e-2,
+		2 * stdWeightPosition * h,
+		10 * stdWeightVelocity * h,
+		10 * stdWeightVelocity * h,
+		1e-5,
+		10 * stdWeightVelocity * h,
+	}
+	var cov [8][8]float64
+	for i := 0; i < 8; i++ {
+		cov[i][i] = std[i] * std[i]
+	}
+	return mean, cov
+}
+
+func kalmanPredict(mean [8]float64, cov [8][8]float64, dt float64) ([8]float64, [8][8]float64) {
+	// F
+	var F [8][8]float64
+	for i := 0; i < 8; i++ {
+		F[i][i] = 1
+	}
+	F[0][4] = dt
+	F[1][5] = dt
+	F[2][6] = dt
+	F[3][7] = dt
+
+	// newMean = F*mean
+	var newMean [8]float64
+	for i := 0; i < 8; i++ {
+		sum := 0.0
+		for k := 0; k < 8; k++ {
+			sum += F[i][k] * mean[k]
+		}
+		newMean[i] = sum
+	}
+
+	// Q - process noise
+	h := mean[3]
+	if h < 1e-6 {
+		h = 1e-6
+	}
+	// Use dt to scale velocity noise? simple scaling
+	stdPos := stdWeightPosition * h
+	stdVel := stdWeightVelocity * h
+	// Q diagonal with dt factor for velocities
+	var qDiag [8]float64
+	qDiag[0] = stdPos * stdPos
+	qDiag[1] = stdPos * stdPos
+	qDiag[2] = 1e-4
+	qDiag[3] = stdPos * stdPos
+	qDiag[4] = stdVel*stdVel*dt*dt + 1e-4
+	qDiag[5] = stdVel*stdVel*dt*dt + 1e-4
+	qDiag[6] = 1e-6
+	qDiag[7] = stdVel*stdVel*dt*dt + 1e-4
+	var Q [8][8]float64
+	for i := 0; i < 8; i++ {
+		Q[i][i] = qDiag[i]
+	}
+
+	// newCov = F*cov*F^T + Q
+	// temp = F*cov
+	var temp [8][8]float64
+	for i := 0; i < 8; i++ {
+		for j := 0; j < 8; j++ {
+			sum := 0.0
+			for k := 0; k < 8; k++ {
+				sum += F[i][k] * cov[k][j]
+			}
+			temp[i][j] = sum
+		}
+	}
+	// newCov = temp * F^T
+	var newCov [8][8]float64
+	for i := 0; i < 8; i++ {
+		for j := 0; j < 8; j++ {
+			sum := 0.0
+			for k := 0; k < 8; k++ {
+				sum += temp[i][k] * F[j][k] // F^T[k][j] = F[j][k]
+			}
+			newCov[i][j] = sum + Q[i][j]
+		}
+	}
+	return newMean, newCov
+}
+
+func kalmanUpdate(mean [8]float64, cov [8][8]float64, z [4]float64) ([8]float64, [8][8]float64) {
+	// H is 4x8: first 4 cols identity
+	// y = z - H*mean
+	var y [4]float64
+	for i := 0; i < 4; i++ {
+		y[i] = z[i] - mean[i]
+	}
+	// S = H*P*H^T + R
+	// H*P is 4x8: first 4 cols of P
+	var HP [4][8]float64
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 8; j++ {
+			HP[i][j] = cov[i][j]
+		}
+	}
+	// S = HP * H^T + R ; H^T is 8x4 with identity top
+	var S [4][4]float64
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 4; j++ {
+			S[i][j] = HP[i][j] // because H^T[j][j] etc = HP*H^T = HP[:,0:4]
+		}
+	}
+	// R
+	h := z[3]
+	if h < 1e-6 {
+		h = 1e-6
+	}
+	var rDiag [4]float64
+	rDiag[0] = stdWeightPosition * h
+	rDiag[0] = rDiag[0] * rDiag[0]
+	rDiag[1] = stdWeightPosition * h
+	rDiag[1] = rDiag[1] * rDiag[1]
+	rDiag[2] = 1e-2
+	rDiag[2] = rDiag[2] * rDiag[2]
+	rDiag[3] = stdWeightPosition * h
+	rDiag[3] = rDiag[3] * rDiag[3]
+	for i := 0; i < 4; i++ {
+		S[i][i] += rDiag[i]
+	}
+
+	// K = P*H^T * S^{-1}
+	// P*H^T is 8x4: first 4 cols of P transposed? P*H^T = P[:,0:4] (8x4)
+	var PHt [8][4]float64
+	for i := 0; i < 8; i++ {
+		for j := 0; j < 4; j++ {
+			PHt[i][j] = cov[i][j]
+		}
+	}
+	// S^{-1}
+	Sinv := matInv4(S)
+	// K = PHt * Sinv (8x4)
+	var K [8][4]float64
+	for i := 0; i < 8; i++ {
+		for j := 0; j < 4; j++ {
+			sum := 0.0
+			for k := 0; k < 4; k++ {
+				sum += PHt[i][k] * Sinv[k][j]
+			}
+			K[i][j] = sum
+		}
+	}
+	// newMean = mean + K*y
+	var newMean [8]float64
+	for i := 0; i < 8; i++ {
+		sum := mean[i]
+		for j := 0; j < 4; j++ {
+			sum += K[i][j] * y[j]
+		}
+		newMean[i] = sum
+	}
+	// newCov = (I - K*H) * P
+	// K*H is 8x8: K (8x4) * H (4x8) = K*H where H = [I 0]
+	var KH [8][8]float64
+	for i := 0; i < 8; i++ {
+		for j := 0; j < 8; j++ {
+			sum := 0.0
+			for k := 0; k < 4; k++ {
+				// H[k][j] = 1 if k==j and j<4 else 0
+				var hkj float64
+				if k == j && j < 4 {
+					hkj = 1
+				}
+				sum += K[i][k] * hkj
+			}
+			KH[i][j] = sum
+		}
+	}
+	var IKH [8][8]float64
+	for i := 0; i < 8; i++ {
+		for j := 0; j < 8; j++ {
+			if i == j {
+				IKH[i][j] = 1 - KH[i][j]
+			} else {
+				IKH[i][j] = -KH[i][j]
+			}
+		}
+	}
+	var newCov [8][8]float64
+	for i := 0; i < 8; i++ {
+		for j := 0; j < 8; j++ {
+			sum := 0.0
+			for k := 0; k < 8; k++ {
+				sum += IKH[i][k] * cov[k][j]
+			}
+			newCov[i][j] = sum
+		}
+	}
+	return newMean, newCov
+}
+
+func matInv4(m [4][4]float64) [4][4]float64 {
+	// Gauss-Jordan for 4x4
+	var aug [4][8]float64
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 4; j++ {
+			aug[i][j] = m[i][j]
+		}
+		for j := 4; j < 8; j++ {
+			if j-4 == i {
+				aug[i][j] = 1
+			}
+		}
+	}
+	for col := 0; col < 4; col++ {
+		// pivot
+		pivot := col
+		maxVal := math.Abs(aug[pivot][col])
+		for row := col + 1; row < 4; row++ {
+			if v := math.Abs(aug[row][col]); v > maxVal {
+				maxVal = v
+				pivot = row
+			}
+		}
+		if maxVal < 1e-12 {
+			// singular, return identity
+			var id [4][4]float64
+			for i := 0; i < 4; i++ {
+				id[i][i] = 1
+			}
+			return id
+		}
+		if pivot != col {
+			aug[col], aug[pivot] = aug[pivot], aug[col]
+		}
+		piv := aug[col][col]
+		for j := 0; j < 8; j++ {
+			aug[col][j] /= piv
+		}
+		for row := 0; row < 4; row++ {
+			if row == col {
+				continue
+			}
+			factor := aug[row][col]
+			if factor != 0 {
+				for j := 0; j < 8; j++ {
+					aug[row][j] -= factor * aug[col][j]
+				}
+			}
+		}
+	}
+	var inv [4][4]float64
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 4; j++ {
+			inv[i][j] = aug[i][j+4]
+		}
+	}
+	return inv
+}
+
+// iou computes IoU for normalized xywh
+func iouByteTrack(a, b DetectionInput) float64 {
+	ax1, ay1 := a.BBoxX, a.BBoxY
+	ax2, ay2 := a.BBoxX+a.BBoxWidth, a.BBoxY+a.BBoxHeight
+	bx1, by1 := b.BBoxX, b.BBoxY
+	bx2, by2 := b.BBoxX+b.BBoxWidth, b.BBoxY+b.BBoxHeight
+	ix1 := math.Max(ax1, bx1)
+	iy1 := math.Max(ay1, by1)
+	ix2 := math.Min(ax2, bx2)
+	iy2 := math.Min(ay2, by2)
+	if ix2 <= ix1 || iy2 <= iy1 {
+		return 0
+	}
+	inter := (ix2 - ix1) * (iy2 - iy1)
+	areaA := a.BBoxWidth * a.BBoxHeight
+	areaB := b.BBoxWidth * b.BBoxHeight
+	union := areaA + areaB - inter
+	if union <= 0 {
+		return 0
+	}
+	return inter / union
 }
 
 func (t *ByteTrack) Track(ctx context.Context, frames []FrameInput, detectionsByFrame map[uuid.UUID][]DetectionInput) (map[uuid.UUID]int, error) {
-	sort.Slice(frames, func(i, j int) bool { return frames[i].Timestamp < frames[j].Timestamp })
+	// Deterministic ordering
+	sort.Slice(frames, func(i, j int) bool {
+		if frames[i].Timestamp == frames[j].Timestamp {
+			return frames[i].FrameID.String() < frames[j].FrameID.String()
+		}
+		return frames[i].Timestamp < frames[j].Timestamp
+	})
 
 	assignments := make(map[uuid.UUID]int)
+	// active tracks: Tracked, Lost, New (not Removed)
 	active := make(map[int]*btTrack)
 	nextIndex := 0
+	var prevTimestamp *float64
 
+	// For MinHits filtering, we need to keep all assignments but later filter
+	// Keep per-track hit count
 	for _, fr := range frames {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
+		}
+
+		// dt for Kalman prediction
+		var dt float64
+		if prevTimestamp != nil {
+			dt = fr.Timestamp - *prevTimestamp
+			if dt < 0 {
+				dt = 0
+			}
+			// Clamp dt to avoid huge jumps (e.g., 2 sec is expected, but allow up to 10 sec)
+			if dt > 10 {
+				dt = 10
+			}
+		} else {
+			dt = 0
+		}
+		// Predict all Tracked and Lost
+		for _, tr := range active {
+			if tr.State == StateTracked || tr.State == StateLost || tr.State == StateNew {
+				if dt > 1e-6 {
+					tr.Mean, tr.Cov = kalmanPredict(tr.Mean, tr.Cov, dt)
+				}
+				// Update predicted bbox
+				pred := xyahToTLWH(tr.Mean, tr.Label)
+				tr.PredictedBBox = pred
+				// Preserve label and dimensions for fallback?
+				tr.LastTimestamp = fr.Timestamp
+			}
 		}
 
 		dets := detectionsByFrame[fr.FrameID]
@@ -61,141 +467,325 @@ func (t *ByteTrack) Track(ctx context.Context, frames []FrameInput, detectionsBy
 				highDets = append(highDets, d)
 			} else if d.Confidence >= t.LowThreshold {
 				lowDets = append(lowDets, d)
-			} else {
-				// discard
 			}
 		}
-		sort.Slice(highDets, func(i, j int) bool { return highDets[i].Confidence > highDets[j].Confidence })
-		sort.Slice(lowDets, func(i, j int) bool { return lowDets[i].Confidence > lowDets[j].Confidence })
+		// Deterministic: confidence desc, UUID asc tie-breaker
+		sort.Slice(highDets, func(i, j int) bool {
+			if highDets[i].Confidence == highDets[j].Confidence {
+				return highDets[i].ID.String() < highDets[j].ID.String()
+			}
+			return highDets[i].Confidence > highDets[j].Confidence
+		})
+		sort.Slice(lowDets, func(i, j int) bool {
+			if lowDets[i].Confidence == lowDets[j].Confidence {
+				return lowDets[i].ID.String() < lowDets[j].ID.String()
+			}
+			return lowDets[i].Confidence > lowDets[j].Confidence
+		})
 
 		// Build sorted active list for deterministic ordering
-		var trackList []*btTrack
-		for _, at := range active {
-			trackList = append(trackList, at)
+		var trackedLost []*btTrack
+		for _, tr := range active {
+			if tr.State == StateTracked || tr.State == StateLost || tr.State == StateNew {
+				trackedLost = append(trackedLost, tr)
+			}
 		}
-		sort.Slice(trackList, func(i, j int) bool { return trackList[i].Index < trackList[j].Index })
+		sort.Slice(trackedLost, func(i, j int) bool { return trackedLost[i].Index < trackedLost[j].Index })
 
-		// First stage: active tracks vs high detections
+		// For second stage, we need list of Tracked only (not Lost, not New) that were unmatched in first stage
+		// So we will compute after first stage.
+
+		// First stage: Tracked+Lost+New vs high
 		matchedTrack := make(map[int]bool)
-		matchedHighIdx := make(map[int]bool) // index in highDets slice
+		matchedHigh := make(map[int]bool)
 
-		if len(trackList) > 0 && len(highDets) > 0 {
-			cost, N := buildCostMatrix(trackList, highDets, t.MatchThreshold)
-			assign := hungarian(cost, N)
-			for i, tr := range trackList {
+		if len(trackedLost) > 0 && len(highDets) > 0 {
+			cost := buildCostMatrixByteTrack(trackedLost, highDets, t.MatchThreshold, t.FuseScore)
+			assign := hungarianRect(cost, len(trackedLost), len(highDets))
+			for i, tr := range trackedLost {
 				j := assign[i]
 				if j >= 0 && j < len(highDets) {
-					if cost[i][j] < 1e8 { // valid match (not INF)
-						d := highDets[j]
-						// double check label consistency already enforced via INF
-						assignments[d.ID] = tr.Index
-						tr.BBox = d
-						tr.LastTimestamp = fr.Timestamp
-						tr.Misses = 0
-						tr.Age++
-						matchedTrack[tr.Index] = true
-						matchedHighIdx[j] = true
+					// Check if not INF
+					if cost[i][j] >= INF/2 {
+						continue
 					}
+					d := highDets[j]
+					// Update Kalman
+					z := tlwhToXyah(d)
+					tr.Mean, tr.Cov = kalmanUpdate(tr.Mean, tr.Cov, z)
+					tr.LastBBox = d
+					tr.PredictedBBox = d // after update, predicted equals observed for next association? but keep updated mean
+					tr.State = StateTracked
+					tr.Hits++
+					tr.HitCount++
+					tr.LastMatchedTime = fr.Timestamp
+					tr.LastTimestamp = fr.Timestamp
+					assignments[d.ID] = tr.Index
+					matchedTrack[tr.Index] = true
+					matchedHigh[j] = true
 				}
 			}
 		}
 
-		// Collect remaining tracks after first stage
-		var remainingTracks []*btTrack
-		for _, tr := range trackList {
-			if !matchedTrack[tr.Index] {
-				remainingTracks = append(remainingTracks, tr)
-			}
-		}
-
-		// Second stage: remaining tracks vs low detections
-		matchedLowIdx := make(map[int]bool)
-		if len(remainingTracks) > 0 && len(lowDets) > 0 {
-			cost, N := buildCostMatrix(remainingTracks, lowDets, t.MatchThreshold)
-			assign := hungarian(cost, N)
-			for i, tr := range remainingTracks {
-				j := assign[i]
-				if j >= 0 && j < len(lowDets) {
-					if cost[i][j] < 1e8 {
-						d := lowDets[j]
-						assignments[d.ID] = tr.Index
-						tr.BBox = d
-						tr.LastTimestamp = fr.Timestamp
-						tr.Misses = 0
-						tr.Age++
-						matchedTrack[tr.Index] = true
-						matchedLowIdx[j] = true
-					}
-				}
-			}
-		}
-
-		// Unmatched tracks management: increment misses, terminate if exceeded
-		for _, tr := range trackList {
-			if !matchedTrack[tr.Index] {
-				tr.Misses++
-				if tr.Misses > t.TrackBuffer {
-					delete(active, tr.Index)
-				}
-			}
-		}
-
-		// New tracks from unmatched high-confidence detections
-		for idx, d := range highDets {
-			if matchedHighIdx[idx] {
+		// Collect unmatched Tracked (only Tracked, not Lost/New) for second stage
+		var remainingTracked []*btTrack
+		for _, tr := range trackedLost {
+			if matchedTrack[tr.Index] {
 				continue
 			}
-			newIdx := nextIndex
-			nextIndex++
-			assignments[d.ID] = newIdx
-			active[newIdx] = &btTrack{
-				Index:         newIdx,
-				Label:         d.Label,
-				BBox:          d,
-				LastTimestamp: fr.Timestamp,
-				Misses:        0,
-				Age:           0,
+			if tr.State == StateTracked {
+				remainingTracked = append(remainingTracked, tr)
 			}
 		}
-		// low unmatched are discarded
-		_ = matchedLowIdx
+		sort.Slice(remainingTracked, func(i, j int) bool { return remainingTracked[i].Index < remainingTracked[j].Index })
+
+		// Second stage: remaining Tracked vs low
+		matchedLow := make(map[int]bool)
+		if len(remainingTracked) > 0 && len(lowDets) > 0 {
+			cost := buildCostMatrixByteTrack(remainingTracked, lowDets, t.MatchThreshold, t.FuseScore)
+			assign := hungarianRect(cost, len(remainingTracked), len(lowDets))
+			for i, tr := range remainingTracked {
+				j := assign[i]
+				if j >= 0 && j < len(lowDets) {
+					if cost[i][j] >= INF/2 {
+						continue
+					}
+					d := lowDets[j]
+					z := tlwhToXyah(d)
+					tr.Mean, tr.Cov = kalmanUpdate(tr.Mean, tr.Cov, z)
+					tr.LastBBox = d
+					tr.PredictedBBox = d
+					tr.State = StateTracked
+					tr.Hits++
+					tr.HitCount++
+					tr.LastMatchedTime = fr.Timestamp
+					tr.LastTimestamp = fr.Timestamp
+					assignments[d.ID] = tr.Index
+					matchedTrack[tr.Index] = true
+					matchedLow[j] = true
+				}
+			}
+		}
+
+		// Mark unmatched Tracked as Lost
+		for _, tr := range trackedLost {
+			if matchedTrack[tr.Index] {
+				continue
+			}
+			// Only Tracked becomes Lost; Lost stays Lost; New stays New but will be considered for removal
+			if tr.State == StateTracked {
+				tr.State = StateLost
+				// Misses not used for time-based buffer, but keep for debugging
+				tr.Misses++
+			} else if tr.State == StateNew {
+				// New that didn't match high remains New; will be checked for removal via buffer
+				tr.Misses++
+			}
+			// Lost already Lost, keep misses? but time-based handles removal
+		}
+
+		// New tracks from unmatched high
+		for idx, d := range highDets {
+			if matchedHigh[idx] {
+				continue
+			}
+			// Do not create from low (already filtered)
+			z := tlwhToXyah(d)
+			mean, cov := kalmanInitiate(z)
+			newIdx := nextIndex
+			nextIndex++
+			tr := &btTrack{
+				Index:           newIdx,
+				Label:           d.Label,
+				State:           StateNew,
+				Mean:            mean,
+				Cov:             cov,
+				LastBBox:        d,
+				PredictedBBox:   d,
+				Age:             0,
+				Hits:            1,
+				HitCount:        1,
+				StartTimestamp:  fr.Timestamp,
+				LastTimestamp:   fr.Timestamp,
+				LastMatchedTime: fr.Timestamp,
+			}
+			// If MinHits ==1, new track immediately Tracked
+			if tr.HitCount >= t.MinHits {
+				tr.State = StateTracked
+			}
+			active[newIdx] = tr
+			// Only assign if track is already confirmed? But per MinHits logic, we should not return unconfirmed.
+			// We will assign now, but later filter at return time.
+			// For now, assign but will filter.
+			assignments[d.ID] = newIdx
+			// If not yet confirmed, this assignment will be filtered later, but we keep it for internal matching.
+			// To avoid polluting output with tentative, we will keep assignments but filter at end.
+		}
+
+		// Promote New tracks that have reached MinHits via second hit (already handled above via HitCount increment)
+		// For tracks that were New and just matched, they may now have HitCount >= MinHits, promote to Tracked
+		for _, tr := range active {
+			if tr.State == StateNew && tr.HitCount >= t.MinHits {
+				tr.State = StateTracked
+			}
+		}
+
+		// Remove Lost/ New tracks that exceed bufferSeconds (time-based, not frame count)
+		for _, tr := range active {
+			if tr.State == StateLost || tr.State == StateNew {
+				if fr.Timestamp-tr.LastMatchedTime > t.BufferSeconds+1e-9 {
+					tr.State = StateRemoved
+				}
+			}
+		}
+
+		timestampCopy := fr.Timestamp
+		prevTimestamp = &timestampCopy
 	}
 
-	return assignments, nil
+	// Filter assignments to only confirmed tracks (HitCount >= MinHits)
+	// Keep all tracks' HitCount, including Removed (still in active map)
+	filtered := make(map[uuid.UUID]int)
+	for detID, trackIdx := range assignments {
+		if tr, ok := active[trackIdx]; ok {
+			if tr.HitCount >= t.MinHits {
+				filtered[detID] = trackIdx
+			}
+		}
+	}
+	return filtered, nil
+}
+
+// gatingDistance computes Mahalanobis gating distance for association (ByteTrack/SORT).
+// y = z - H*mean, S = H*P*H^T + R, distance = y^T * S^{-1} * y
+func gatingDistance(mean [8]float64, cov [8][8]float64, z [4]float64) float64 {
+	var y [4]float64
+	for i := 0; i < 4; i++ {
+		y[i] = z[i] - mean[i]
+	}
+	// S as in kalmanUpdate
+	var HP [4][8]float64
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 8; j++ {
+			HP[i][j] = cov[i][j]
+		}
+	}
+	var S [4][4]float64
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 4; j++ {
+			S[i][j] = HP[i][j]
+		}
+	}
+	h := z[3]
+	if h < 1e-6 {
+		h = 1e-6
+	}
+	var rDiag [4]float64
+	rDiag[0] = stdWeightPosition * h
+	rDiag[0] = rDiag[0] * rDiag[0]
+	rDiag[1] = stdWeightPosition * h
+	rDiag[1] = rDiag[1] * rDiag[1]
+	rDiag[2] = 1e-4
+	rDiag[3] = stdWeightPosition * h
+	rDiag[3] = rDiag[3] * rDiag[3]
+	for i := 0; i < 4; i++ {
+		S[i][i] += rDiag[i]
+	}
+	Sinv := matInv4(S)
+	var tmp [4]float64
+	for i := 0; i < 4; i++ {
+		sum := 0.0
+		for j := 0; j < 4; j++ {
+			sum += Sinv[i][j] * y[j]
+		}
+		tmp[i] = sum
+	}
+	dist := 0.0
+	for i := 0; i < 4; i++ {
+		dist += y[i] * tmp[i]
+	}
+	return dist
 }
 
 const INF = 1e9
-const DUMMY_COST = 1.0
 
-func buildCostMatrix(tracks []*btTrack, dets []DetectionInput, matchThreshold float64) ([][]float64, int) {
+func buildCostMatrixByteTrack(tracks []*btTrack, dets []DetectionInput, matchThreshold float64, fuseScore bool) [][]float64 {
 	nRows := len(tracks)
 	nCols := len(dets)
-	N := nRows
-	if nCols > N {
-		N = nCols
-	}
-	cost := make([][]float64, N)
-	for i := 0; i < N; i++ {
-		cost[i] = make([]float64, N)
-		for j := 0; j < N; j++ {
-			cost[i][j] = DUMMY_COST
+	cost := make([][]float64, nRows)
+	for i := range cost {
+		cost[i] = make([]float64, nCols)
+		for j := range cost[i] {
+			cost[i][j] = INF
 		}
 	}
 	for i, tr := range tracks {
+		// Use predicted bbox for tracks
+		predBBox := tr.PredictedBBox
+		// Fallback if PredictedBBox empty (not yet predicted)
+		if predBBox.BBoxWidth == 0 && predBBox.BBoxHeight == 0 {
+			// Use LastBBox or derive from mean
+			predBBox = xyahToTLWH(tr.Mean, tr.Label)
+		}
 		for j, d := range dets {
 			if tr.Label != d.Label {
-				cost[i][j] = INF
 				continue
 			}
-			score := iou(tr.BBox, d)
-			if score >= matchThreshold {
-				cost[i][j] = 1 - score
+			score := iouByteTrack(predBBox, d)
+			if score < matchThreshold {
+				continue
+			}
+			c := 1 - score
+			if fuseScore {
+				// Fuse with detection confidence: higher confidence -> lower cost
+				// Ultralytics: fused = IoU * detection_score
+				fused := score * d.Confidence
+				c = 1 - fused
+			}
+			cost[i][j] = c
+		}
+	}
+	return cost
+}
+
+// hungarianRect solves rectangular assignment with INF forbidden.
+// Returns assign array size nRows, where assign[i]=j or -1 for unmatched.
+func hungarianRect(cost [][]float64, nRows, nCols int) []int {
+	if nRows == 0 || nCols == 0 {
+		return make([]int, nRows)
+	}
+	n := nRows
+	if nCols > n {
+		n = nCols
+	}
+	// Build square cost with dummy cost 0 (so unmatched goes to dummy)
+	square := make([][]float64, n)
+	for i := 0; i < n; i++ {
+		square[i] = make([]float64, n)
+		for j := 0; j < n; j++ {
+			if i < nRows && j < nCols {
+				square[i][j] = cost[i][j]
 			} else {
-				cost[i][j] = INF
+				square[i][j] = 0 // dummy
 			}
 		}
 	}
-	return cost, N
+	assignSquare := hungarian(square, n)
+	// Map back to rectangular
+	result := make([]int, nRows)
+	for i := 0; i < nRows; i++ {
+		j := assignSquare[i]
+		if j < 0 || j >= nCols {
+			result[i] = -1
+			continue
+		}
+		if cost[i][j] >= INF/2 {
+			result[i] = -1
+			continue
+		}
+		result[i] = j
+	}
+	return result
 }
 
 // hungarian solves the assignment problem for a square cost matrix N x N (minimization).

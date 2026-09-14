@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +58,8 @@ type Config struct {
 	TrackerLowThreshold    float64
 	TrackerMatchThreshold  float64
 	TrackerTrackBuffer     int
+	TrackerFuseScore       bool
+	TrackerMinHits         int
 }
 
 func Load() Config {
@@ -176,18 +179,50 @@ func Load() Config {
 		}
 	}
 
-	detectorName := os.Getenv("DETECTOR_NAME")
-	if detectorName == "" {
-		detectorName = "yolov8n"
-	}
+	detectorNameRaw := os.Getenv("DETECTOR_NAME")
 	detectorVersion := os.Getenv("DETECTOR_VERSION")
 	if detectorVersion == "" {
 		detectorVersion = "1"
 	}
-	modelPath := os.Getenv("MODEL_PATH")
+	modelPathRaw := os.Getenv("MODEL_PATH")
 	pythonPath := os.Getenv("PYTHON_PATH")
 	if pythonPath == "" {
 		pythonPath = "python3"
+	}
+
+	// Fix redundancy: MODEL_PATH and DETECTOR_NAME were duplicated.
+	// Now DETECTOR_NAME is the single source of truth; MODEL_PATH is derived if not set.
+	// If MODEL_PATH is explicitly set and DETECTOR_NAME is not, derive DETECTOR_NAME from MODEL_PATH basename.
+	// If both are explicitly set, validate consistency (basename without ext should match DETECTOR_NAME).
+	var detectorName string
+	var modelPath string
+	switch {
+	case detectorNameRaw != "" && modelPathRaw == "":
+		detectorName = detectorNameRaw
+		modelPath = filepath.Join("workers", "detector", detectorName+".pt")
+	case detectorNameRaw == "" && modelPathRaw != "":
+		modelPath = modelPathRaw
+		base := filepath.Base(modelPath)
+		ext := filepath.Ext(base)
+		derived := strings.TrimSuffix(base, ext)
+		if derived == "" {
+			derived = "yolov8n"
+		}
+		detectorName = derived
+	case detectorNameRaw != "" && modelPathRaw != "":
+		detectorName = detectorNameRaw
+		modelPath = modelPathRaw
+		// Validate consistency but don't fail - just ensure derived name matches if user set both
+		base := filepath.Base(modelPath)
+		derived := strings.TrimSuffix(base, filepath.Ext(base))
+		if derived != "" && derived != detectorName {
+			// Keep MODEL_PATH as explicit override, but keep DETECTOR_NAME as set.
+			// This allows custom paths like /home/berzz/.../yolo11n.pt with DETECTOR_NAME=yolo11n (consistent case)
+			// Mismatch is tolerated to allow versioned file names without renaming detector.
+		}
+	default:
+		detectorName = "yolov8n"
+		modelPath = filepath.Join("workers", "detector", "yolov8n.pt")
 	}
 	yoloBatchSize := 16
 	if v := os.Getenv("YOLO_BATCH_SIZE"); v != "" {
@@ -409,6 +444,27 @@ func Load() Config {
 		trackerTrackBuffer = parsed
 	}
 
+	trackerFuseScore := true
+	if v := os.Getenv("TRACKER_FUSE_SCORE"); v != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "y", "on":
+			trackerFuseScore = true
+		case "0", "false", "no", "n", "off":
+			trackerFuseScore = false
+		default:
+			panic(fmt.Sprintf("invalid TRACKER_FUSE_SCORE %q: must be boolean", v))
+		}
+	}
+
+	trackerMinHits := 2
+	if v := os.Getenv("TRACKER_MIN_HITS"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			panic(fmt.Sprintf("invalid TRACKER_MIN_HITS %q: %v", v, err))
+		}
+		trackerMinHits = parsed
+	}
+
 	if !(0 <= trackerLowThreshold && trackerLowThreshold < trackerHighThreshold && trackerHighThreshold <= 1) {
 		panic(fmt.Sprintf("invalid tracker thresholds: must satisfy 0 <= TRACKER_LOW_THRESHOLD (%.4f) < TRACKER_HIGH_THRESHOLD (%.4f) <= 1", trackerLowThreshold, trackerHighThreshold))
 	}
@@ -417,6 +473,9 @@ func Load() Config {
 	}
 	if trackerTrackBuffer < 1 {
 		panic(fmt.Sprintf("invalid TRACKER_TRACK_BUFFER %d: must be >= 1", trackerTrackBuffer))
+	}
+	if trackerMinHits < 1 {
+		panic(fmt.Sprintf("invalid TRACKER_MIN_HITS %d: must be >= 1", trackerMinHits))
 	}
 
 	return Config{
@@ -466,5 +525,7 @@ func Load() Config {
 		TrackerLowThreshold:    trackerLowThreshold,
 		TrackerMatchThreshold:  trackerMatchThreshold,
 		TrackerTrackBuffer:     trackerTrackBuffer,
+		TrackerFuseScore:       trackerFuseScore,
+		TrackerMinHits:         trackerMinHits,
 	}
 }

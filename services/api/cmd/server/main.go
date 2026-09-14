@@ -95,7 +95,7 @@ func main() {
 	visualService := visual.NewServiceWithBatchSize(detectionRepo, videoFrameRepo, store, yolo, cfg.DetectionThreshold, cfg.DetectorName, cfg.DetectorVersion, cfg.YOLOBatchSize)
 
 	trackRepo := video_track.NewRepository(db.DB)
-	selectedTracker, err := tracker.New(cfg.TrackerType, cfg.TrackerHighThreshold, cfg.TrackerLowThreshold, cfg.TrackerMatchThreshold, cfg.TrackerTrackBuffer)
+	selectedTracker, err := tracker.New(cfg.TrackerType, cfg.TrackerHighThreshold, cfg.TrackerLowThreshold, cfg.TrackerMatchThreshold, cfg.TrackerTrackBuffer, cfg.TrackerFuseScore, cfg.TrackerMinHits)
 	if err != nil {
 		slog.Error("failed to create tracker", "error", err, "tracker_type", cfg.TrackerType)
 		os.Exit(1)
