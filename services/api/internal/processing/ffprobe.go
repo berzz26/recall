@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/berzz26/recall/services/api/internal/segment_description"
 	"github.com/berzz26/recall/services/api/internal/segment_embedding"
 	"github.com/berzz26/recall/services/api/internal/storage"
@@ -21,6 +23,7 @@ import (
 	"github.com/berzz26/recall/services/api/internal/video_event"
 	"github.com/berzz26/recall/services/api/internal/video_frame"
 	"github.com/berzz26/recall/services/api/internal/video_media"
+	"github.com/berzz26/recall/services/api/internal/video_processing_checkpoint"
 	"github.com/berzz26/recall/services/api/internal/video_segment"
 	"github.com/berzz26/recall/services/api/internal/video_track"
 	"github.com/berzz26/recall/services/api/internal/visual"
@@ -38,6 +41,7 @@ type FFprobeProcessor struct {
 	eventService   *video_event.Service
 	descService    *segment_description.Service
 	embedService   *segment_embedding.Service
+	checkpointRepo *video_processing_checkpoint.Repository
 }
 
 func NewFFprobeProcessor(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service) *FFprobeProcessor {
@@ -109,6 +113,12 @@ func NewFFprobeProcessorWithDescriptions(ffprobePath string, timeout time.Durati
 func NewFFprobeProcessorWithEmbeddings(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service, segmentService *video_segment.Service, frameService *video_frame.Service, visualService *visual.Service, trackService *video_track.Service, eventService *video_event.Service, descService *segment_description.Service, embedService *segment_embedding.Service) *FFprobeProcessor {
 	p := NewFFprobeProcessorWithDescriptions(ffprobePath, timeout, store, mediaService, segmentService, frameService, visualService, trackService, eventService, descService)
 	p.embedService = embedService
+	return p
+}
+
+func NewFFprobeProcessorWithCheckpoints(ffprobePath string, timeout time.Duration, store storage.Storage, mediaService *video_media.Service, segmentService *video_segment.Service, frameService *video_frame.Service, visualService *visual.Service, trackService *video_track.Service, eventService *video_event.Service, descService *segment_description.Service, embedService *segment_embedding.Service, checkpointRepo *video_processing_checkpoint.Repository) *FFprobeProcessor {
+	p := NewFFprobeProcessorWithEmbeddings(ffprobePath, timeout, store, mediaService, segmentService, frameService, visualService, trackService, eventService, descService, embedService)
+	p.checkpointRepo = checkpointRepo
 	return p
 }
 
@@ -361,13 +371,45 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 		}
 		segStart := time.Now()
 		var err error
-		segments, err = p.segmentService.GenerateForVideo(ctx, v.ID, *meta.DurationSeconds)
-		segMs = time.Since(segStart).Milliseconds()
-		if err != nil {
-			slog.Error("pipeline: segment generation failed", "video_id", v.ID.String(), "duration_ms", segMs, "error", err)
-			return fmt.Errorf("failed to generate segments: %w", err)
+		if p.checkpointRepo != nil {
+			// Reuse existing segments if already present to preserve checkpoint state and avoid cascade deletion of frames/detections.
+			existing, getErr := p.segmentService.GetByVideoID(ctx, v.ID)
+			if getErr != nil {
+				return fmt.Errorf("failed to get existing segments: %w", getErr)
+			}
+			if len(existing) > 0 {
+				segments = existing
+				segMs = time.Since(segStart).Milliseconds()
+				slog.Info("pipeline: segments reused (checkpoint)", "video_id", v.ID.String(), "segments", len(segments), "duration_ms", segMs)
+			} else {
+				segments, err = p.segmentService.GenerateForVideo(ctx, v.ID, *meta.DurationSeconds)
+				segMs = time.Since(segStart).Milliseconds()
+				if err != nil {
+					slog.Error("pipeline: segment generation failed", "video_id", v.ID.String(), "duration_ms", segMs, "error", err)
+					return fmt.Errorf("failed to generate segments: %w", err)
+				}
+				slog.Info("pipeline: segments generated", "video_id", v.ID.String(), "segments", len(segments), "duration_ms", segMs, "duration_seconds", *meta.DurationSeconds)
+			}
+			segmentIDs := make([]uuid.UUID, 0, len(segments))
+			for _, s := range segments {
+				segmentIDs = append(segmentIDs, s.ID)
+			}
+			if len(segmentIDs) > 0 {
+				if err := p.checkpointRepo.EnsureForSegments(ctx, v.ID, segmentIDs); err != nil {
+					slog.Error("pipeline: checkpoint ensure failed", "video_id", v.ID.String(), "error", err)
+					return fmt.Errorf("failed to ensure checkpoints: %w", err)
+				}
+				slog.Info("pipeline: checkpoints ensured", "video_id", v.ID.String(), "segments", len(segments))
+			}
+		} else {
+			segments, err = p.segmentService.GenerateForVideo(ctx, v.ID, *meta.DurationSeconds)
+			segMs = time.Since(segStart).Milliseconds()
+			if err != nil {
+				slog.Error("pipeline: segment generation failed", "video_id", v.ID.String(), "duration_ms", segMs, "error", err)
+				return fmt.Errorf("failed to generate segments: %w", err)
+			}
+			slog.Info("pipeline: segments generated", "video_id", v.ID.String(), "segments", len(segments), "duration_ms", segMs, "duration_seconds", *meta.DurationSeconds)
 		}
-		slog.Info("pipeline: segments generated", "video_id", v.ID.String(), "segments", len(segments), "duration_ms", segMs, "duration_seconds", *meta.DurationSeconds)
 	} else if p.frameService != nil {
 		return fmt.Errorf("frame extraction requires segments")
 	}
@@ -388,26 +430,141 @@ func (p *FFprobeProcessor) Process(ctx context.Context, v *video.Video) error {
 			w = 1280
 			h = 720
 		}
-		frameStart := time.Now()
-		if _, err := p.frameService.GenerateForVideo(ctx, v, segments, *meta.DurationSeconds, w, h); err != nil {
+		// Checkpoint-aware frame extraction: skip if frames already exist for video (preserve completed segment frames)
+		if p.checkpointRepo != nil {
+			if existingFrames, err := p.frameService.GetByVideoID(ctx, v.ID); err == nil && len(existingFrames) > 0 {
+				slog.Info("pipeline: frame extraction skipped (frames already exist, checkpoint)", "video_id", v.ID.String(), "existing_frames", len(existingFrames))
+				frameMs = 0
+			} else {
+				frameStart := time.Now()
+				if _, err := p.frameService.GenerateForVideo(ctx, v, segments, *meta.DurationSeconds, w, h); err != nil {
+					frameMs = time.Since(frameStart).Milliseconds()
+					slog.Error("pipeline: frame extraction failed", "video_id", v.ID.String(), "duration_ms", frameMs, "error", err)
+					return fmt.Errorf("failed to extract frames: %w", err)
+				}
+				frameMs = time.Since(frameStart).Milliseconds()
+				slog.Info("pipeline: frame extraction complete", "video_id", v.ID.String(), "duration_ms", frameMs)
+			}
+		} else {
+			frameStart := time.Now()
+			if _, err := p.frameService.GenerateForVideo(ctx, v, segments, *meta.DurationSeconds, w, h); err != nil {
+				frameMs = time.Since(frameStart).Milliseconds()
+				slog.Error("pipeline: frame extraction failed", "video_id", v.ID.String(), "duration_ms", frameMs, "error", err)
+				return fmt.Errorf("failed to extract frames: %w", err)
+			}
 			frameMs = time.Since(frameStart).Milliseconds()
-			slog.Error("pipeline: frame extraction failed", "video_id", v.ID.String(), "duration_ms", frameMs, "error", err)
-			return fmt.Errorf("failed to extract frames: %w", err)
+			slog.Info("pipeline: frame extraction complete", "video_id", v.ID.String(), "duration_ms", frameMs)
 		}
-		frameMs = time.Since(frameStart).Milliseconds()
-		slog.Info("pipeline: frame extraction complete", "video_id", v.ID.String(), "duration_ms", frameMs)
 	}
 
 	if p.visualService != nil {
-		visualStart := time.Now()
-		slog.Info("pipeline: detection start", "video_id", v.ID.String())
-		if _, err := p.visualService.AnalyzeVideo(ctx, v.ID); err != nil {
+		if p.checkpointRepo != nil {
+			// Segment-level checkpointed detection: one YOLO session per video, bounded batches per segment
+			visualStart := time.Now()
+			slog.Info("pipeline: detection start (checkpointed)", "video_id", v.ID.String(), "segments", len(segments))
+			sessObj, sessErr := p.visualService.NewDetectionSession(ctx)
+			var useSess bool
+			if sessErr == nil && sessObj != nil {
+				useSess = true
+				defer func() {
+					if cerr := sessObj.Close(); cerr != nil {
+						slog.Warn("pipeline: failed to close YOLO session", "video_id", v.ID.String(), "error", cerr)
+					}
+				}()
+				slog.Info("pipeline: YOLO session created for checkpointed detection", "video_id", v.ID.String())
+			} else {
+				slog.Info("pipeline: YOLO session not available, using per-batch detection", "video_id", v.ID.String(), "reason", sessErr)
+			}
+			// Iterate segments in deterministic segment_index order
+			for _, seg := range segments {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				cp, err := p.checkpointRepo.GetByVideoAndSegment(ctx, v.ID, seg.ID)
+				if err != nil {
+					// If checkpoint not found, ensure it
+					if err := p.checkpointRepo.EnsureForSegments(ctx, v.ID, []uuid.UUID{seg.ID}); err != nil {
+						return fmt.Errorf("failed to ensure checkpoint for segment %d: %w", seg.SegmentIndex, err)
+					}
+					cp, err = p.checkpointRepo.GetByVideoAndSegment(ctx, v.ID, seg.ID)
+					if err != nil {
+						return fmt.Errorf("failed to get checkpoint for segment %d: %w", seg.SegmentIndex, err)
+					}
+				}
+				if cp.Status == video_processing_checkpoint.StatusComplete {
+					slog.Info("pipeline: segment skip COMPLETE", "video_id", v.ID.String(), "segment_index", seg.SegmentIndex, "segment_id", seg.ID.String())
+					continue
+				}
+				if cp.Status == video_processing_checkpoint.StatusFailed {
+					slog.Info("pipeline: segment skip FAILED (no auto retry)", "video_id", v.ID.String(), "segment_index", seg.SegmentIndex, "segment_id", seg.ID.String())
+					continue
+				}
+				if cp.Status == video_processing_checkpoint.StatusProcessing {
+					slog.Info("pipeline: segment was PROCESSING, reprocessing", "video_id", v.ID.String(), "segment_index", seg.SegmentIndex, "segment_id", seg.ID.String())
+				}
+				if _, err := p.checkpointRepo.MarkProcessing(ctx, v.ID, seg.ID); err != nil {
+					return fmt.Errorf("failed to mark segment %d PROCESSING: %w", seg.SegmentIndex, err)
+				}
+				slog.Info("pipeline: segment PROCESSING", "video_id", v.ID.String(), "segment_index", seg.SegmentIndex, "segment_id", seg.ID.String(), "start_time", seg.StartTime, "end_time", seg.EndTime)
+				// Process segment: detection (and future per-segment stages)
+				// Use checkpoint-aware per segment detection; whole-video tracking etc. remains after loop.
+				var segErr error
+				if useSess && sessObj != nil {
+					_, segErr = p.visualService.AnalyzeSegmentWithSession(ctx, v.ID, seg.ID, sessObj)
+				} else {
+					_, segErr = p.visualService.AnalyzeSegment(ctx, v.ID, seg.ID)
+				}
+				if segErr != nil {
+					errStr := segErr.Error()
+					if len(errStr) > 1000 {
+						errStr = errStr[:1000]
+					}
+					if _, markErr := p.checkpointRepo.MarkFailed(ctx, v.ID, seg.ID, errStr); markErr != nil {
+						slog.Error("pipeline: failed to mark segment FAILED", "video_id", v.ID.String(), "segment_index", seg.SegmentIndex, "error", markErr)
+					}
+					slog.Error("pipeline: segment processing failed", "video_id", v.ID.String(), "segment_index", seg.SegmentIndex, "segment_id", seg.ID.String(), "error", segErr)
+					visualMs = time.Since(visualStart).Milliseconds()
+					return fmt.Errorf("segment %d failed: %w", seg.SegmentIndex, segErr)
+				}
+				if _, err := p.checkpointRepo.MarkComplete(ctx, v.ID, seg.ID); err != nil {
+					return fmt.Errorf("failed to mark segment %d COMPLETE: %w", seg.SegmentIndex, err)
+				}
+				slog.Info("pipeline: segment COMPLETE", "video_id", v.ID.String(), "segment_index", seg.SegmentIndex, "segment_id", seg.ID.String())
+			}
 			visualMs = time.Since(visualStart).Milliseconds()
-			slog.Error("pipeline: detection failed", "video_id", v.ID.String(), "duration_ms", visualMs, "error", err)
-			return fmt.Errorf("failed to analyze visuals: %w", err)
+			slog.Info("pipeline: detection complete (checkpointed)", "video_id", v.ID.String(), "segments", len(segments), "duration_ms", visualMs)
+			// After per-segment loop, check for any FAILED checkpoints - must not proceed to final stages, video should be FAILED
+			allCps, err := p.checkpointRepo.GetByVideoID(ctx, v.ID)
+			if err == nil {
+				for _, c := range allCps {
+					if c.Status == video_processing_checkpoint.StatusFailed {
+						slog.Error("pipeline: segment FAILED, aborting pipeline", "video_id", v.ID.String(), "segment_id", c.SegmentID.String(), "error", c.Error)
+						return fmt.Errorf("segment %s failed: %s", c.SegmentID.String(), func() string {
+							if c.Error != nil {
+								return *c.Error
+							}
+							return "unknown"
+						}())
+					}
+				}
+				// Also check for any PENDING/PROCESSING that were not completed (should not happen after loop)
+				for _, c := range allCps {
+					if c.Status != video_processing_checkpoint.StatusComplete {
+						slog.Warn("pipeline: segment not COMPLETE after loop", "video_id", v.ID.String(), "segment_id", c.SegmentID.String(), "status", c.Status)
+					}
+				}
+			}
+		} else {
+			visualStart := time.Now()
+			slog.Info("pipeline: detection start", "video_id", v.ID.String())
+			if _, err := p.visualService.AnalyzeVideo(ctx, v.ID); err != nil {
+				visualMs = time.Since(visualStart).Milliseconds()
+				slog.Error("pipeline: detection failed", "video_id", v.ID.String(), "duration_ms", visualMs, "error", err)
+				return fmt.Errorf("failed to analyze visuals: %w", err)
+			}
+			visualMs = time.Since(visualStart).Milliseconds()
+			slog.Info("pipeline: detection complete", "video_id", v.ID.String(), "duration_ms", visualMs)
 		}
-		visualMs = time.Since(visualStart).Milliseconds()
-		slog.Info("pipeline: detection complete", "video_id", v.ID.String(), "duration_ms", visualMs)
 	}
 
 	if p.trackService != nil {

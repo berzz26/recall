@@ -41,14 +41,19 @@ type Tracker interface {
 // New creates a tracker based on TRACKER_TYPE.
 // trackerType must be "iou" or "bytetrack"; any other value returns an error.
 // For "iou", the ByteTrack thresholds/buffer are ignored and defaults (0.2 / 5s) are used.
-// For "bytetrack", the provided thresholds and buffer are used.
-func New(trackerType string, highThreshold, lowThreshold, matchThreshold float64, trackBuffer int) (Tracker, error) {
+// For "bytetrack", the provided thresholds and buffer are used. fuseScore and minHits are ByteTrack-only.
+func New(trackerType string, highThreshold, lowThreshold, matchThreshold float64, trackBuffer int, fuseScore bool, minHits int) (Tracker, error) {
 	switch trackerType {
 	case "iou":
 		return NewIoUTracker(), nil
 	case "bytetrack":
-		return NewByteTrack(highThreshold, lowThreshold, matchThreshold, trackBuffer), nil
+		return NewByteTrack(highThreshold, lowThreshold, matchThreshold, trackBuffer, fuseScore, minHits), nil
 	default:
 		return nil, fmt.Errorf("invalid TRACKER_TYPE %q: must be one of [iou, bytetrack]", trackerType)
 	}
+}
+
+// NewWithDefaults keeps backward compatibility for callers that used the old 4-param factory.
+func NewWith4Params(trackerType string, highThreshold, lowThreshold, matchThreshold float64, trackBuffer int) (Tracker, error) {
+	return New(trackerType, highThreshold, lowThreshold, matchThreshold, trackBuffer, true, 2)
 }

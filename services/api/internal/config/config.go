@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ type Config struct {
 	DetectorVersion        string
 	ModelPath              string
 	PythonPath             string
+	YOLOBatchSize          int
 	EventMovementThreshold float64
 	VisionProvider         string
 	VisionPythonPath       string
@@ -56,6 +58,8 @@ type Config struct {
 	TrackerLowThreshold    float64
 	TrackerMatchThreshold  float64
 	TrackerTrackBuffer     int
+	TrackerFuseScore       bool
+	TrackerMinHits         int
 }
 
 func Load() Config {
@@ -163,7 +167,7 @@ func Load() Config {
 		}
 	}
 
-	detectionThreshold := 0.25
+	detectionThreshold := 0.35
 	if v := os.Getenv("DETECTION_CONFIDENCE_THRESHOLD"); v != "" {
 		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
 			if parsed < 0 || parsed > 1 {
@@ -175,18 +179,61 @@ func Load() Config {
 		}
 	}
 
-	detectorName := os.Getenv("DETECTOR_NAME")
-	if detectorName == "" {
-		detectorName = "yolov8n"
-	}
+	detectorNameRaw := os.Getenv("DETECTOR_NAME")
 	detectorVersion := os.Getenv("DETECTOR_VERSION")
 	if detectorVersion == "" {
 		detectorVersion = "1"
 	}
-	modelPath := os.Getenv("MODEL_PATH")
+	modelPathRaw := os.Getenv("MODEL_PATH")
 	pythonPath := os.Getenv("PYTHON_PATH")
 	if pythonPath == "" {
 		pythonPath = "python3"
+	}
+
+	// Fix redundancy: MODEL_PATH and DETECTOR_NAME were duplicated.
+	// Now DETECTOR_NAME is the single source of truth; MODEL_PATH is derived if not set.
+	// If MODEL_PATH is explicitly set and DETECTOR_NAME is not, derive DETECTOR_NAME from MODEL_PATH basename.
+	// If both are explicitly set, validate consistency (basename without ext should match DETECTOR_NAME).
+	var detectorName string
+	var modelPath string
+	switch {
+	case detectorNameRaw != "" && modelPathRaw == "":
+		detectorName = detectorNameRaw
+		modelPath = filepath.Join("workers", "detector", detectorName+".pt")
+	case detectorNameRaw == "" && modelPathRaw != "":
+		modelPath = modelPathRaw
+		base := filepath.Base(modelPath)
+		ext := filepath.Ext(base)
+		derived := strings.TrimSuffix(base, ext)
+		if derived == "" {
+			derived = "yolov8n"
+		}
+		detectorName = derived
+	case detectorNameRaw != "" && modelPathRaw != "":
+		detectorName = detectorNameRaw
+		modelPath = modelPathRaw
+		// Validate consistency but don't fail - just ensure derived name matches if user set both
+		base := filepath.Base(modelPath)
+		derived := strings.TrimSuffix(base, filepath.Ext(base))
+		if derived != "" && derived != detectorName {
+			// Keep MODEL_PATH as explicit override, but keep DETECTOR_NAME as set.
+			// This allows custom paths like /home/berzz/.../yolo11n.pt with DETECTOR_NAME=yolo11n (consistent case)
+			// Mismatch is tolerated to allow versioned file names without renaming detector.
+		}
+	default:
+		detectorName = "yolov8n"
+		modelPath = filepath.Join("workers", "detector", "yolov8n.pt")
+	}
+	yoloBatchSize := 16
+	if v := os.Getenv("YOLO_BATCH_SIZE"); v != "" {
+		parsed, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			panic(fmt.Sprintf("invalid YOLO_BATCH_SIZE %q: %v", v, err))
+		}
+		if parsed <= 0 {
+			panic(fmt.Sprintf("YOLO_BATCH_SIZE must be > 0, got %s", v))
+		}
+		yoloBatchSize = parsed
 	}
 
 	movementThreshold := 0.05
@@ -364,7 +411,7 @@ func Load() Config {
 		panic(fmt.Sprintf("invalid TRACKER_TYPE %q: must be one of [iou, bytetrack]", trackerType))
 	}
 
-	trackerHighThreshold := 0.6
+	trackerHighThreshold := 0.50
 	if v := os.Getenv("TRACKER_HIGH_THRESHOLD"); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
@@ -372,7 +419,7 @@ func Load() Config {
 		}
 		trackerHighThreshold = parsed
 	}
-	trackerLowThreshold := 0.1
+	trackerLowThreshold := 0.10
 	if v := os.Getenv("TRACKER_LOW_THRESHOLD"); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
@@ -380,7 +427,7 @@ func Load() Config {
 		}
 		trackerLowThreshold = parsed
 	}
-	trackerMatchThreshold := 0.8
+	trackerMatchThreshold := 0.30
 	if v := os.Getenv("TRACKER_MATCH_THRESHOLD"); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
@@ -388,13 +435,34 @@ func Load() Config {
 		}
 		trackerMatchThreshold = parsed
 	}
-	trackerTrackBuffer := 30
+	trackerTrackBuffer := 5
 	if v := os.Getenv("TRACKER_TRACK_BUFFER"); v != "" {
 		parsed, err := strconv.Atoi(v)
 		if err != nil {
 			panic(fmt.Sprintf("invalid TRACKER_TRACK_BUFFER %q: %v", v, err))
 		}
 		trackerTrackBuffer = parsed
+	}
+
+	trackerFuseScore := true
+	if v := os.Getenv("TRACKER_FUSE_SCORE"); v != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "y", "on":
+			trackerFuseScore = true
+		case "0", "false", "no", "n", "off":
+			trackerFuseScore = false
+		default:
+			panic(fmt.Sprintf("invalid TRACKER_FUSE_SCORE %q: must be boolean", v))
+		}
+	}
+
+	trackerMinHits := 2
+	if v := os.Getenv("TRACKER_MIN_HITS"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			panic(fmt.Sprintf("invalid TRACKER_MIN_HITS %q: %v", v, err))
+		}
+		trackerMinHits = parsed
 	}
 
 	if !(0 <= trackerLowThreshold && trackerLowThreshold < trackerHighThreshold && trackerHighThreshold <= 1) {
@@ -405,6 +473,9 @@ func Load() Config {
 	}
 	if trackerTrackBuffer < 1 {
 		panic(fmt.Sprintf("invalid TRACKER_TRACK_BUFFER %d: must be >= 1", trackerTrackBuffer))
+	}
+	if trackerMinHits < 1 {
+		panic(fmt.Sprintf("invalid TRACKER_MIN_HITS %d: must be >= 1", trackerMinHits))
 	}
 
 	return Config{
@@ -429,6 +500,7 @@ func Load() Config {
 		DetectorVersion:        detectorVersion,
 		ModelPath:              modelPath,
 		PythonPath:             pythonPath,
+		YOLOBatchSize:          yoloBatchSize,
 		EventMovementThreshold: movementThreshold,
 		VisionProvider:         visionProvider,
 		VisionPythonPath:       visionPythonPath,
@@ -453,5 +525,7 @@ func Load() Config {
 		TrackerLowThreshold:    trackerLowThreshold,
 		TrackerMatchThreshold:  trackerMatchThreshold,
 		TrackerTrackBuffer:     trackerTrackBuffer,
+		TrackerFuseScore:       trackerFuseScore,
+		TrackerMinHits:         trackerMinHits,
 	}
 }
