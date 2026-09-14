@@ -19,9 +19,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
     <div className="app-shell">
       <aside className="sidebar">
         <Link to="/videos" className="sidebar-brand">
-          <div className="brand-icon">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.4"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/></svg>
-          </div>
+          <svg width="22" height="22" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect width="32" height="32" rx="7" fill="#0f172a"/>
+            <rect width="32" height="32" rx="7" fill="none" stroke="white" strokeOpacity="0.06" strokeWidth="1"/>
+            <circle cx="15.5" cy="15.2" r="6.2" fill="none" stroke="white" strokeWidth="1.7" strokeLinecap="round"/>
+            <path d="M13.2 13.1 L13.2 17.8 L17.9 15.45 Z" fill="#10a37f" stroke="#10a37f" strokeLinejoin="round" strokeWidth="1.1"/>
+            <path d="M19.7 19.4 L24.2 23.9" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+            <circle cx="15.5" cy="15.2" r="8.2" fill="none" stroke="#10a37f" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" stroke-dasharray="46.9 4.6" stroke-dashoffset="0" transform="rotate(-32 15.5 15.2)" opacity="0.98"/>
+            <path d="M 20.95 8.75 L 22.48 10.92 L 20.15 12.15" fill="none" stroke="#10a37f" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" opacity="0.98"/>
+          </svg>
           <span>ReCall</span>
         </Link>
         <nav className="sidebar-nav">
