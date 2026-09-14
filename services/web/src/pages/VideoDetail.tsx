@@ -38,6 +38,7 @@ export default function VideoDetail() {
   const [pvResults, setPvResults] = useState<any[] | null>(null)
   const [pvLoading, setPvLoading] = useState(false)
   const [pvError, setPvError] = useState<string | null>(null)
+  const [filterSegmentId, setFilterSegmentId] = useState<string | null>(null)
 
   const fetchAll = async () => {
     if (!id) return
@@ -135,10 +136,23 @@ export default function VideoDetail() {
   if (err) return <div className="card" style={{ padding: 16 }}><div style={{ color: '#b91c1c', marginBottom: 8 }}>Error: {err}</div><button className="btn" onClick={fetchAll}>Retry</button></div>
   if (!video) return <div className="card" style={{ padding: 32, textAlign: 'center', color: 'var(--muted)' }}>Loading…</div>
 
-  const detectionsByFrame = detections.reduce<Record<string, Detection[]>>((acc, d) => { (acc[d.frame_id] = acc[d.frame_id] || []).push(d); return acc }, {})
-  const summary = detections.reduce<Record<string, number>>((acc, d) => { acc[d.label] = (acc[d.label] || 0) + 1; return acc }, {})
-  const frameCountBySeg = frames.reduce<Record<string, number>>((a, f) => { a[f.segment_id] = (a[f.segment_id] || 0) + 1; return a }, {})
-  const detCountBySeg = detections.reduce<Record<string, number>>((a, d) => { a[d.segment_id] = (a[d.segment_id] || 0) + 1; return a }, {})
+  // filtered view when a per-video search result is selected
+  const activeSegment = filterSegmentId ? segments.find(s => s.id === filterSegmentId) : null
+  const displaySegments = activeSegment ? [activeSegment] : segments
+  const displayTracks = activeSegment ? tracks.filter(t => t.start_timestamp < activeSegment.end_time && t.end_timestamp > activeSegment.start_time) : tracks
+  const displayEvents = activeSegment ? events.filter(e => {
+    const segStart = activeSegment.start_time
+    const segEnd = activeSegment.end_time
+    const evEnd = e.end_timestamp ?? e.start_timestamp
+    return evEnd > segStart && e.start_timestamp < segEnd
+  }) : events
+  const displayDescriptions = activeSegment ? descriptions.filter(d => d.segment_id === filterSegmentId) : descriptions
+  const displayFrames = activeSegment ? frames.filter(f => f.segment_id === filterSegmentId) : frames
+  const displayDetections = activeSegment ? detections.filter(d => d.segment_id === filterSegmentId) : detections
+  const detectionsByFrame = displayDetections.reduce<Record<string, Detection[]>>((acc, d) => { (acc[d.frame_id] = acc[d.frame_id] || []).push(d); return acc }, {})
+  const summary = displayDetections.reduce<Record<string, number>>((acc, d) => { acc[d.label] = (acc[d.label] || 0) + 1; return acc }, {})
+  const frameCountBySeg = displayFrames.reduce<Record<string, number>>((a, f) => { a[f.segment_id] = (a[f.segment_id] || 0) + 1; return a }, {})
+  const detCountBySeg = displayDetections.reduce<Record<string, number>>((a, d) => { a[d.segment_id] = (a[d.segment_id] || 0) + 1; return a }, {})
   const imgSrc = (f: Frame) => client.imageUrl(`/api/v1/videos/${video.id}/frames/${f.id}/image`)
   const isReady = video.status === 'READY'
   const total = media?.duration_seconds ?? (segments.length ? Math.max(...segments.map(s => s.end_time)) : 0) ?? 0
@@ -269,6 +283,16 @@ export default function VideoDetail() {
           <button className="btn btn-primary" onClick={doPerVideoSearch} style={{ padding: '6px 12px', borderRadius: 8, fontSize: 12 }}>{pvLoading ? 'Searching…' : 'Search'}</button>
         </div>
         {pvError && <div style={{ marginTop: 8, color: '#b91c1c', fontSize: 12 }}>{pvError}</div>}
+        {filterSegmentId && (() => {
+          const seg = segments.find(s => s.id === filterSegmentId)
+          return (
+            <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: '#e6f6ef', border: '1px solid #b8e0d0', borderRadius: 8, fontSize: 12 }}>
+              <span style={{ color: '#0e8f6f', fontWeight: 600 }}>Filtered to segment {seg ? `#${seg.segment_index} • ${formatDur(seg.start_time)} – ${formatDur(seg.end_time)}` : filterSegmentId!.slice(0,8)}</span>
+              <span style={{ color: 'var(--muted)' }}>• Analysis & Frames below show only this segment</span>
+              <button className="btn" onClick={() => setFilterSegmentId(null)} style={{ marginLeft: 'auto', padding: '4px 8px', fontSize: 11, background: 'white' }}>Clear filter ✕</button>
+            </div>
+          )
+        })()}
         {pvResults !== null && (
           <div style={{ marginTop: 10 }}>
             {pvLoading ? <div style={{ padding: 16, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>Searching…</div> : pvResults.length === 0 ? <div style={{ padding: 16, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>No matching moments in this video</div> : (
@@ -280,8 +304,9 @@ export default function VideoDetail() {
                   const ciIdx = idx === -1 && matched ? desc.toLowerCase().indexOf(matched.toLowerCase()) : -1
                   const hasHighlight = matched && (idx !== -1 || ciIdx !== -1)
                   const pos = idx !== -1 ? idx : ciIdx
+                  const isSelected = filterSegmentId === r.segment_id
                   return (
-                    <div key={r.segment_id} onClick={() => seekTo(r.start_time)} style={{ display: 'flex', gap: 10, padding: 10, background: '#f8f9f8', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer' }}>
+                    <div key={r.segment_id} onClick={() => { setFilterSegmentId(r.segment_id); seekTo(r.start_time); setActiveTab('segments'); setAnalysisCollapsed(false) }} style={{ display: 'flex', gap: 10, padding: 10, background: isSelected ? '#e6f6ef' : '#f8f9f8', border: `1px solid ${isSelected ? '#b8e0d0' : 'var(--border)'}`, borderRadius: 8, cursor: 'pointer' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 3 }}>{formatTs(r.start_time)} – {formatTs(r.end_time)} • Similarity {Math.round((r.similarity||0)*100)}%</div>
                         <div style={{ fontSize: 12, lineHeight: 1.4, color: 'var(--text)' }}>
@@ -321,17 +346,17 @@ export default function VideoDetail() {
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                   <button className="collapse-btn" onClick={() => setSegmentsCollapsed(v => !v)} title={segmentsCollapsed ? 'Expand' : 'Collapse'} style={{ width: 24, height: 24, fontSize: 10 }}>{segmentsCollapsed ? '▶' : '▼'}</button>
-                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>{segments.length} segments</span>
+                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>{displaySegments.length} segments{filterSegmentId ? ' • filtered' : ''}</span>
                 </div>
                 {!segmentsCollapsed && (
                   <div className="table-wrap" style={{ border: 'none' }}>
                     <table className="table">
                       <thead><tr><th>Segment</th><th>Start</th><th>End</th><th>Duration</th><th>Frames</th><th>Detections</th><th></th></tr></thead>
                       <tbody>
-                        {segments.map(s => (
+                        {displaySegments.map(s => (
                           <tr key={s.id} id={`seg-row-${s.id}`} onClick={() => seekTo(s.start_time)} style={{ cursor: 'pointer' }}><td>{s.segment_index}</td><td>{s.start_time.toFixed(2)}s</td><td>{s.end_time.toFixed(2)}s</td><td>{s.duration.toFixed(2)}s</td><td>{frameCountBySeg[s.id] || 0}</td><td>{detCountBySeg[s.id] || 0}</td><td><button className="btn" onClick={(e) => { e.stopPropagation(); seekTo(s.start_time) }} style={{ padding: '3px 6px', borderRadius: 20, background: '#e6f6ef', border: '1px solid #cfe9de', color: '#0e8f6f', fontSize: 10 }}>▶</button></td></tr>
                         ))}
-                        {segments.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: 24 }}>No segments</td></tr>}
+                        {displaySegments.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: 24 }}>No segments</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -343,20 +368,20 @@ export default function VideoDetail() {
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                   <button className="collapse-btn" onClick={() => setTracksCollapsed(v => !v)} title={tracksCollapsed ? 'Expand' : 'Collapse'} style={{ width: 24, height: 24, fontSize: 10 }}>{tracksCollapsed ? '▶' : '▼'}</button>
-                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>{tracks.length} tracks</span>
+                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>{displayTracks.length} tracks{filterSegmentId ? ' • filtered' : ''}</span>
                 </div>
                 {!tracksCollapsed && (
-                  tracks.length === 0 ? <div className="empty">No tracks</div> : (
+                  displayTracks.length === 0 ? <div className="empty">No tracks{filterSegmentId ? ' in this segment' : ''}</div> : (
                     <>
                       <div style={{ marginBottom: 12 }}>
                         <select value={selectedTrack === 'all' ? 'all' : String(selectedTrack)} onChange={e => setSelectedTrack(e.target.value === 'all' ? 'all' : Number(e.target.value))} style={{ minWidth: 320, padding: '8px 10px', fontSize: 12, borderRadius: 8, border: '1px solid var(--border)' }}>
-                          <option value="all">All tracks ({tracks.length})</option>
-                          {tracks.map(t => <option key={t.id} value={String(t.track_index)}>Track {t.track_index} — {t.label} — {t.start_timestamp.toFixed(1)}s → {t.end_timestamp.toFixed(1)}s — {t.detection_count} dets</option>)}
+                          <option value="all">All tracks ({displayTracks.length}){filterSegmentId ? ' in segment' : ''}</option>
+                          {displayTracks.map(t => <option key={t.id} value={String(t.track_index)}>Track {t.track_index} — {t.label} — {t.start_timestamp.toFixed(1)}s → {t.end_timestamp.toFixed(1)}s — {t.detection_count} dets</option>)}
                         </select>
                       </div>
                       {selectedTrack === 'all' ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 260, overflowY: 'auto', paddingRight: 4 }}>
-                          {tracks.map(t => (
+                          {displayTracks.filter(t => selectedTrack === 'all' || t.track_index === selectedTrack).map(t => (
                             <div key={t.id} onClick={() => seekTo(t.start_timestamp)} title="Click to play from here" style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '8px 10px', background: '#f8f9f8', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer' }}>
                               <span style={{ minWidth: 80, fontWeight: 700, textTransform: 'uppercase', fontSize: 12 }}>{t.label}</span>
                               <span style={{ fontSize: 12 }}>Track {t.track_index}</span>
@@ -369,8 +394,8 @@ export default function VideoDetail() {
                         </div>
                       ) : (
                         (() => {
-                          const t = tracks.find(x => x.track_index === selectedTrack)
-                          if (!t) return <div className="empty">Track not found</div>
+                          const t = displayTracks.find(x => x.track_index === selectedTrack)
+                          if (!t) return <div className="empty">Track not found{filterSegmentId ? ' in this segment' : ''}</div>
                           return <div onClick={() => seekTo(t.start_timestamp)} title="Click to play from here" style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', padding: 10, background: '#f8f9f8', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer' }}><span style={{ minWidth: 80, fontWeight: 700, textTransform: 'uppercase', fontSize: 12 }}>{t.label}</span><span style={{ fontSize: 12 }}>Track {t.track_index}</span><span style={{ fontSize: 12 }}>{t.start_timestamp.toFixed(1)}s → {t.end_timestamp.toFixed(1)}s</span><span style={{ fontSize: 12 }}>{t.detection_count} detections</span><span style={{ color: 'var(--muted)', fontSize: 11 }}>{t.tracker_name} v{t.tracker_version}</span><span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--accent)' }}>▶ Play</span></div>
                         })()
                       )}
@@ -384,7 +409,7 @@ export default function VideoDetail() {
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                   <button className="collapse-btn" onClick={() => setEventsCollapsed(v => !v)} title={eventsCollapsed ? 'Expand' : 'Collapse'} style={{ width: 24, height: 24, fontSize: 10 }}>{eventsCollapsed ? '▶' : '▼'}</button>
-                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>{events.length} events</span>
+                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>{displayEvents.length} events{filterSegmentId ? ' • filtered' : ''}</span>
                 </div>
                 {!eventsCollapsed && (
                   <>
@@ -396,15 +421,15 @@ export default function VideoDetail() {
                         <option value="OBJECT_DISAPPEARED">Last observed</option>
                         <option value="OBJECT_MOVED">Movement</option>
                       </select>
-                      {selectedTrack !== 'all' && <span style={{ fontSize: 11, color: 'var(--muted)', alignSelf: 'center' }}>Filtered to Track {selectedTrack} + event filter</span>}
+                      {selectedTrack !== 'all' && <span style={{ fontSize: 11, color: 'var(--muted)', alignSelf: 'center' }}>Filtered to Track {selectedTrack} + event filter{filterSegmentId ? ' + segment' : ''}</span>}
                     </div>
-                    {media?.duration_seconds && tracks.length > 0 && (
+                    {media?.duration_seconds && displayTracks.length > 0 && (
                       <div style={{ marginBottom: 12, padding: 8, background: '#f8f9f8', borderRadius: 8, border: '1px solid var(--border)' }}>
                         <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4 }}>Timeline — Present (blue) & Movement (green)</div>
-                        {tracks.filter(t => selectedTrack === 'all' || t.track_index === selectedTrack).map(t => {
+                        {displayTracks.filter(t => selectedTrack === 'all' || t.track_index === selectedTrack).map(t => {
                           const dur = media.duration_seconds || effectiveTotal
-                          const presentEvents = events.filter(e => e.track_id === t.id && e.event_type === 'OBJECT_PRESENT')
-                          const movedEvents = events.filter(e => e.track_id === t.id && e.event_type === 'OBJECT_MOVED')
+                          const presentEvents = displayEvents.filter(e => e.track_id === t.id && e.event_type === 'OBJECT_PRESENT')
+                          const movedEvents = displayEvents.filter(e => e.track_id === t.id && e.event_type === 'OBJECT_MOVED')
                           return (
                             <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                               <span style={{ width: 90, fontSize: 11, fontWeight: 600 }}>T{t.track_index} {t.label}</span>
@@ -422,18 +447,18 @@ export default function VideoDetail() {
                       <table className="table">
                         <thead><tr><th>Time</th><th>Type</th><th>Label</th><th>Track</th><th>Confidence</th></tr></thead>
                         <tbody>
-                          {events.filter(e => eventFilter === 'all' || e.event_type === eventFilter).filter(e => { if (selectedTrack === 'all') return true; const tr = tracks.find(t => t.id === e.track_id); return tr?.track_index === selectedTrack }).map(e => (
+                          {displayEvents.filter(e => eventFilter === 'all' || e.event_type === eventFilter).filter(e => { if (selectedTrack === 'all') return true; const tr = displayTracks.find(t => t.id === e.track_id); return tr ? tr?.track_index === selectedTrack : false }).map(e => (
                             <tr key={e.id} onClick={() => seekTo(e.start_timestamp)} title="Click to play from here" style={{ cursor: 'pointer', ...(e.event_type === 'OBJECT_MOVED' ? { background: '#f0faf7' } : {}) }}>
                               <td>{e.end_timestamp ? `${e.start_timestamp.toFixed(2)} → ${e.end_timestamp.toFixed(2)}` : e.start_timestamp.toFixed(2)}</td>
                               <td>{e.event_type === 'OBJECT_APPEARED' ? 'Appeared' : e.event_type === 'OBJECT_DISAPPEARED' ? 'Last observed' : e.event_type === 'OBJECT_PRESENT' ? 'Present' : e.event_type === 'OBJECT_MOVED' ? 'Movement' : e.event_type}</td>
                               <td>{e.label}</td>
-                              <td>{(() => { const tr = tracks.find(t => t.id === e.track_id); return tr ? `Track ${tr.track_index}` : '-' })()}</td>
+                              <td>{(() => { const tr = displayTracks.find(t => t.id === e.track_id); return tr ? `Track ${tr.track_index}` : '-' })()}</td>
                               <td>{e.confidence != null ? `${(e.confidence * 100).toFixed(0)}%` : '-'}</td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
-                      {events.filter(e => eventFilter === 'all' || e.event_type === eventFilter).length === 0 && <div className="empty">No events</div>}
+                      {displayEvents.filter(e => eventFilter === 'all' || e.event_type === eventFilter).filter(e => { if (selectedTrack === 'all') return true; const tr = displayTracks.find(t => t.id === e.track_id); return tr ? tr?.track_index === selectedTrack : false }).length === 0 && <div className="empty">No events{filterSegmentId ? ' in this segment' : ''}</div>}
                     </div>
                   </>
                 )}
@@ -444,12 +469,12 @@ export default function VideoDetail() {
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                   <button className="collapse-btn" onClick={() => setDescriptionsCollapsed(v => !v)} title={descriptionsCollapsed ? 'Expand' : 'Collapse'} style={{ width: 24, height: 24, fontSize: 10 }}>{descriptionsCollapsed ? '▶' : '▼'}</button>
-                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>{descriptions.length} descriptions</span>
+                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>{displayDescriptions.length} descriptions{filterSegmentId ? ' • filtered' : ''}</span>
                 </div>
                 {!descriptionsCollapsed && (
-                  descriptions.length === 0 ? <div className="empty">No descriptions — waiting for processing or VLM unavailable</div> : (
+                  displayDescriptions.length === 0 ? <div className="empty">No descriptions{filterSegmentId ? ' in this segment' : ' — waiting for processing or VLM unavailable'}</div> : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      {descriptions.slice().sort((a, b) => { const sa = segments.find(s => s.id === a.segment_id)?.start_time ?? 0; const sb = segments.find(s => s.id === b.segment_id)?.start_time ?? 0; return sa - sb }).map(d => {
+                      {displayDescriptions.slice().sort((a, b) => { const sa = segments.find(s => s.id === a.segment_id)?.start_time ?? 0; const sb = segments.find(s => s.id === b.segment_id)?.start_time ?? 0; return sa - sb }).map(d => {
                         const seg = segments.find(s => s.id === d.segment_id)
                         const fmtTime = (s: number) => { const m = Math.floor(s / 60); const ss = Math.floor(s % 60); return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}` }
                         const timeLabel = seg ? `${fmtTime(seg.start_time)} → ${fmtTime(seg.end_time)}` : d.segment_id.slice(0, 8)
@@ -480,9 +505,9 @@ export default function VideoDetail() {
       </div>
 
       <div className="card">
-        <h3 style={{ margin: '0 0 12px 0', fontSize: 13, fontWeight: 600 }}>Frames ({frames.length}) {selectedTrack !== 'all' ? `— filtered to Track ${selectedTrack}` : ''}</h3>
+        <h3 style={{ margin: '0 0 12px 0', fontSize: 13, fontWeight: 600 }}>Frames ({displayFrames.length}) {filterSegmentId ? '• filtered to segment' : ''} {selectedTrack !== 'all' ? `• Track ${selectedTrack}` : ''}</h3>
         <div className="frame-grid">
-          {frames.filter(f => { if (selectedTrack === 'all') return true; const dets = detectionsByFrame[f.id] || []; return dets.some(d => detToTrack[d.id] === selectedTrack) }).map(f => {
+          {displayFrames.filter(f => { if (selectedTrack === 'all') return true; const dets = detectionsByFrame[f.id] || []; return dets.some(d => detToTrack[d.id] === selectedTrack) }).map(f => {
             const dets = detectionsByFrame[f.id] || []
             return (
               <div key={f.id} className="frame-card" onClick={() => setSelectedFrame(f)} style={{ cursor: 'pointer', opacity: selectedTrack !== 'all' && !dets.some(d => detToTrack[d.id] === selectedTrack) ? 0.6 : 1 }}>
@@ -508,7 +533,7 @@ export default function VideoDetail() {
             )
           })}
         </div>
-        {frames.length === 0 && <div className="empty">No frames</div>}
+        {displayFrames.length === 0 && <div className="empty">No frames{filterSegmentId ? ' in this segment' : ''}</div>}
       </div>
 
       {selectedFrame && (
