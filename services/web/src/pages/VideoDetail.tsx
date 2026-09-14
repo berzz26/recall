@@ -34,6 +34,10 @@ export default function VideoDetail() {
   const [mediaCollapsed, setMediaCollapsed] = useState(false)
   const [analysisCollapsed, setAnalysisCollapsed] = useState(false)
   const [activeTab, setActiveTab] = useState<'segments' | 'tracks' | 'events' | 'descriptions'>('segments')
+  const [pvQuery, setPvQuery] = useState('')
+  const [pvResults, setPvResults] = useState<any[] | null>(null)
+  const [pvLoading, setPvLoading] = useState(false)
+  const [pvError, setPvError] = useState<string | null>(null)
 
   const fetchAll = async () => {
     if (!id) return
@@ -110,6 +114,22 @@ export default function VideoDetail() {
       el.play().catch(() => {})
       el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     } catch {}
+  }
+
+  const doPerVideoSearch = async () => {
+    const q = pvQuery.trim(); if (!q) { setPvError('Query is required'); return }
+    if (!video) return
+    setPvLoading(true); setPvError(null)
+    try {
+      const res: any = await client.post('/api/v1/search', { query: q, video_id: video.id, limit: 8 })
+      setPvResults(res.results || [])
+    } catch (e: any) { setPvError(e.message || 'Search failed'); setPvResults([]) } finally { setPvLoading(false) }
+  }
+
+  const formatTs = (sec: number) => {
+    const s = Math.floor(sec), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec2 = s % 60
+    if (h >= 1) return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec2).padStart(2,'0')}`
+    return `${String(m).padStart(2,'0')}:${String(sec2).padStart(2,'0')}`
   }
 
   if (err) return <div className="card" style={{ padding: 16 }}><div style={{ color: '#b91c1c', marginBottom: 8 }}>Error: {err}</div><button className="btn" onClick={fetchAll}>Retry</button></div>
@@ -238,6 +258,49 @@ export default function VideoDetail() {
           </div>
         </div>
         <div className="timeline-labels">{tickLabels.map(l => <span key={l}>{l}</span>)}</div>
+      </div>
+
+      <div className="card" style={{ padding: 12 }}>
+        <h3 style={{ margin: '0 0 8px 0', fontSize: 13, fontWeight: 600 }}>Search in this video</h3>
+        <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8 }}>Find moments in this video using natural language</div>
+        <div className="search-hero">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9aa3b1" strokeWidth="1.8"><circle cx="11" cy="11" r="6" /><path d="M20 20L15.3 15.3" /></svg>
+          <input placeholder="person entering, vehicle near entrance, person at counter" value={pvQuery} onChange={e => setPvQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && doPerVideoSearch()} style={{ flex: 1, border: 'none', outline: 'none', fontSize: 12 }} />
+          <button className="btn btn-primary" onClick={doPerVideoSearch} style={{ padding: '6px 12px', borderRadius: 8, fontSize: 12 }}>{pvLoading ? 'Searching…' : 'Search'}</button>
+        </div>
+        {pvError && <div style={{ marginTop: 8, color: '#b91c1c', fontSize: 12 }}>{pvError}</div>}
+        {pvResults !== null && (
+          <div style={{ marginTop: 10 }}>
+            {pvLoading ? <div style={{ padding: 16, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>Searching…</div> : pvResults.length === 0 ? <div style={{ padding: 16, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>No matching moments in this video</div> : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {pvResults.map((r: any) => {
+                  const matched: string = r.matched_text || ''
+                  const desc: string = r.description || ''
+                  const idx = matched && desc ? desc.indexOf(matched) : -1
+                  const ciIdx = idx === -1 && matched ? desc.toLowerCase().indexOf(matched.toLowerCase()) : -1
+                  const hasHighlight = matched && (idx !== -1 || ciIdx !== -1)
+                  const pos = idx !== -1 ? idx : ciIdx
+                  return (
+                    <div key={r.segment_id} onClick={() => seekTo(r.start_time)} style={{ display: 'flex', gap: 10, padding: 10, background: '#f8f9f8', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 3 }}>{formatTs(r.start_time)} – {formatTs(r.end_time)} • Similarity {Math.round((r.similarity||0)*100)}%</div>
+                        <div style={{ fontSize: 12, lineHeight: 1.4, color: 'var(--text)' }}>
+                          {hasHighlight && matched ? (() => {
+                            const before = desc.slice(0, pos)
+                            const match = desc.slice(pos, pos + matched.length)
+                            const after = desc.slice(pos + matched.length)
+                            return <>{before}<mark style={{ background: '#fef08a', color: '#422006', padding: '0 2px', borderRadius: 3, fontWeight: 600 }}>{match}</mark>{after}</>
+                          })() : desc}
+                        </div>
+                      </div>
+                      <span style={{ alignSelf: 'center', fontSize: 11, color: 'var(--accent)', fontWeight: 600, whiteSpace: 'nowrap' }}>▶ Play</span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="card" style={{ padding: '10px 14px' }}>
