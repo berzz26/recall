@@ -120,7 +120,9 @@ export default function Videos() {
                     <td style={{ fontSize: 12, color: 'var(--muted)' }}>{segs}</td>
                     <td><span className={`badge ${isReady ? 'badge-green' : 'badge-gray'}`}>{isReady ? 'Processed' : v.status}</span></td>
                     <td>
-                      <button className="btn" title="Delete" onClick={() => onDelete(v.id, v.filename)} style={{ border: 'none', background: 'transparent', padding: '4px 8px', color: 'var(--muted)' }}>⋯</button>
+                      <button className="btn" title="Delete video" onClick={() => onDelete(v.id, v.filename)} style={{ border: '1px solid var(--border)', background: 'white', color: '#dc2626', padding: '6px 8px', borderRadius: 8 }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                      </button>
                     </td>
                   </tr>
                 )

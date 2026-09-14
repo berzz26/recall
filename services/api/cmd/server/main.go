@@ -202,9 +202,9 @@ func main() {
 	app.Use(recover.New())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "*",
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization, Range",
+		AllowHeaders: "*",
 		ExposeHeaders: "Content-Range, Accept-Ranges, Content-Length, Content-Type",
-		AllowMethods: "GET,POST,DELETE,OPTIONS",
+		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 	}))
 	if cfg.Env == "development" {
 		app.Use(logger.New(logger.Config{
