@@ -37,10 +37,28 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--input", required=False, default="")
     p.add_argument("--output", required=False, default="")
-    p.add_argument("--threshold", type=float, default=0.25)
+    p.add_argument("--threshold", type=float, default=0.35)
     p.add_argument("--model", default="")
     p.add_argument("--persistent", action="store_true", help="Run in persistent mode: load model once and handle multiple batches via stdin/stdout")
     return p.parse_args()
+
+
+# 13-class whitelist for B.2 - exact allowed YOLO classes (defined once, not user-configurable)
+ALLOWED_CLASSES = {
+    "person",
+    "car",
+    "motorcycle",
+    "bus",
+    "truck",
+    "bicycle",
+    "backpack",
+    "handbag",
+    "suitcase",
+    "dog",
+    "cat",
+    "cell phone",
+    "knife",
+}
 
 
 def load_model(model_path):
@@ -103,11 +121,13 @@ def _inference_batch(model, frames, threshold):
         if boxes is not None:
             for box in boxes:
                 det_count_before_filter += 1
+                cls_id = int(box.cls.item()) if hasattr(box.cls, "item") else int(box.cls[0])
+                label = r.names.get(cls_id, str(cls_id)) if hasattr(r, "names") else str(cls_id)
+                if label not in ALLOWED_CLASSES:
+                    continue
                 conf = float(box.conf.item()) if hasattr(box.conf, "item") else float(box.conf[0])
                 if conf < threshold:
                     continue
-                cls_id = int(box.cls.item()) if hasattr(box.cls, "item") else int(box.cls[0])
-                label = r.names.get(cls_id, str(cls_id)) if hasattr(r, "names") else str(cls_id)
                 xyxy = box.xyxy[0].tolist() if hasattr(box.xyxy[0], "tolist") else list(box.xyxy[0])
                 x1, y1, x2, y2 = xyxy
                 fw = w if w > 0 else 640

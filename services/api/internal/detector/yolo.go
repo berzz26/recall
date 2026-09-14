@@ -30,7 +30,7 @@ func NewYoloDetector(pythonPath, scriptPath, modelPath string, threshold float64
 		pythonPath = "python3"
 	}
 	if threshold < 0 || threshold > 1 {
-		threshold = 0.25
+		threshold = 0.35
 	}
 	return &YoloDetector{pythonPath: pythonPath, scriptPath: scriptPath, modelPath: modelPath, threshold: threshold}
 }

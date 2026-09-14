@@ -16,6 +16,23 @@ import (
 	"github.com/google/uuid"
 )
 
+// 13-class whitelist for B.2 - exact allowed YOLO classes (defined once, not user-configurable)
+var allowedClasses = map[string]struct{}{
+	"person":     {},
+	"car":        {},
+	"motorcycle": {},
+	"bus":        {},
+	"truck":      {},
+	"bicycle":    {},
+	"backpack":   {},
+	"handbag":    {},
+	"suitcase":   {},
+	"dog":        {},
+	"cat":        {},
+	"cell phone": {},
+	"knife":      {},
+}
+
 type Service struct {
 	detectionRepo   *detection.Repository
 	frameRepo       *video_frame.Repository
@@ -33,7 +50,7 @@ func NewService(detRepo *detection.Repository, frameRepo *video_frame.Repository
 
 func NewServiceWithBatchSize(detRepo *detection.Repository, frameRepo *video_frame.Repository, store storage.Storage, analyzer detector.VisualAnalyzer, threshold float64, name, version string, batchSize int) *Service {
 	if threshold < 0 || threshold > 1 {
-		threshold = 0.25
+		threshold = 0.35
 	}
 	if name == "" {
 		name = "yolov8n"
@@ -188,10 +205,13 @@ func (s *Service) AnalyzeVideo(ctx context.Context, videoID uuid.UUID) ([]detect
 		for _, f := range batchFrames {
 			dets := results[f.ID]
 			for _, r := range dets {
-				if r.Confidence < s.threshold {
+				if r.Label == "" {
 					continue
 				}
-				if r.Label == "" {
+				if _, ok := allowedClasses[r.Label]; !ok {
+					continue
+				}
+				if r.Confidence < s.threshold {
 					continue
 				}
 				x, y, w, h := detection.ClampBBox(r.BBoxX, r.BBoxY, r.BBoxWidth, r.BBoxHeight)

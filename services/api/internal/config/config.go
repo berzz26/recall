@@ -164,7 +164,7 @@ func Load() Config {
 		}
 	}
 
-	detectionThreshold := 0.25
+	detectionThreshold := 0.35
 	if v := os.Getenv("DETECTION_CONFIDENCE_THRESHOLD"); v != "" {
 		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
 			if parsed < 0 || parsed > 1 {
