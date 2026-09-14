@@ -68,12 +68,28 @@ export default function VideoDetail() {
     if (tStr == null) return
     const tVal = parseFloat(tStr)
     if (isNaN(tVal) || !isFinite(tVal)) return
-    const el = videoRef.current
-    if (!el) return
-    const seek = () => { try { el.currentTime = Math.max(0, tVal) } catch {} }
-    if (el.readyState >= 1) seek()
-    else el.addEventListener('loadedmetadata', seek, { once: true })
-  }, [searchParams])
+    let cancelled = false
+    let timeoutId: any
+    const trySeek = () => {
+      if (cancelled) return
+      const el = videoRef.current
+      if (!el) {
+        timeoutId = setTimeout(trySeek, 100)
+        return
+      }
+      const doSeek = () => {
+        if (cancelled) return
+        try {
+          el.currentTime = Math.max(0, tVal)
+          el.play().catch(() => {})
+        } catch {}
+      }
+      if (el.readyState >= 1) doSeek()
+      else el.addEventListener('loadedmetadata', doSeek, { once: true })
+    }
+    trySeek()
+    return () => { cancelled = true; if (timeoutId) clearTimeout(timeoutId) }
+  }, [searchParams, video])
   useEffect(() => {
     if (!video || (video.status !== 'UPLOADED' && video.status !== 'PROCESSING')) return
     const t = setInterval(fetchAll, 3000)
@@ -193,20 +209,32 @@ export default function VideoDetail() {
         <div className="timeline-track">
           <div className="timeline-ticks">
             {segments.map(s => (
-              <div key={s.id} style={{ position: 'absolute', left: `${(s.start_time / effectiveTotal) * 100}%`, width: `${Math.max(0.5, (s.duration / effectiveTotal) * 100)}%`, top: 6, bottom: 6, background: '#eef3f0', borderRight: '1px solid #dde8e2' }} title={`S${s.segment_index} ${formatDur(s.start_time)}-${formatDur(s.end_time)}`} />
+              <div key={s.id} style={{ position: 'absolute', left: `${(s.start_time / effectiveTotal) * 100}%`, width: `${Math.max(0.5, (s.duration / effectiveTotal) * 100)}%`, top: 4, bottom: 4, background: '#d4ede5', borderRight: '1px solid #b8ddd0', borderRadius: 2 }} title={`S${s.segment_index} ${formatDur(s.start_time)}-${formatDur(s.end_time)}`} />
             ))}
-            {events.slice(0, 120).map(ev => {
-              const left = (ev.start_timestamp / effectiveTotal) * 100
-              if (left > 100) return null
-              const color = ev.event_type === 'OBJECT_MOVED' ? '#10a37f' : ev.event_type === 'OBJECT_APPEARED' || ev.event_type === 'OBJECT_DISAPPEARED' ? '#ef4444' : ev.label === 'vehicle' ? '#3b82f6' : '#f59e0b'
-              return <div key={ev.id} className="marker" style={{ left: `${left}%`, background: color, height: 12, opacity: 0.9 }} />
-            })}
-            {tracks.slice(0, 40).map(tr => {
-              const left = (tr.start_timestamp / effectiveTotal) * 100
-              const w = ((tr.end_timestamp - tr.start_timestamp) / effectiveTotal) * 100
-              if (left > 100) return null
-              return <div key={tr.id} style={{ position: 'absolute', left: `${left}%`, width: `${Math.max(0.6, Math.min(w, 100 - left))}%`, top: 9, height: 3, background: tr.label === 'vehicle' ? '#3b82f6' : '#10a37f', opacity: 0.45, borderRadius: 1 }} />
-            })}
+            {(() => {
+              const labelColor = (label: string) => {
+                const l = (label || '').toLowerCase()
+                if (l === 'person') return '#0e9f6e'
+                if (l === 'vehicle' || l === 'car' || l === 'truck' || l === 'bus' || l === 'motorcycle' || l === 'bicycle') return '#3b82f6'
+                if (l) return '#f59e0b'
+                return '#ef4444'
+              }
+              return (
+                <>
+                  {tracks.map(tr => {
+                    const left = (tr.start_timestamp / effectiveTotal) * 100
+                    const w = ((tr.end_timestamp - tr.start_timestamp) / effectiveTotal) * 100
+                    if (left > 100 || left < 0) return null
+                    return <div key={`tr-${tr.id}`} style={{ position: 'absolute', left: `${left}%`, width: `${Math.max(0.8, Math.min(w, 100 - left))}%`, top: 10, height: 4, background: labelColor(tr.label), opacity: 0.55, borderRadius: 1 }} title={`${tr.label} #${tr.track_index} ${formatDur(tr.start_timestamp)}-${formatDur(tr.end_timestamp)}`} />
+                  })}
+                  {events.map(ev => {
+                    const left = (ev.start_timestamp / effectiveTotal) * 100
+                    if (left > 100 || left < 0) return null
+                    return <div key={`ev-${ev.id}`} className="marker" style={{ left: `${left}%`, background: '#ef4444', height: 14, width: 2.5, opacity: 0.95, borderRadius: 1, top: 7 }} title={`${ev.event_type} ${ev.label} @${formatDur(ev.start_timestamp)}`} />
+                  })}
+                </>
+              )
+            })()}
           </div>
         </div>
         <div className="timeline-labels">{tickLabels.map(l => <span key={l}>{l}</span>)}</div>

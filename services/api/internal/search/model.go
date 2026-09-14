@@ -23,6 +23,7 @@ type SearchResult struct {
 	StartTime   float64         `json:"start_time"`
 	EndTime     float64         `json:"end_time"`
 	Description string          `json:"description"`
+	MatchedText string          `json:"matched_text,omitempty"`
 	Similarity  float64         `json:"similarity"`
 	Detections  []DetectionInfo `json:"detections"`
 	Tracks      []TrackInfo     `json:"tracks"`
