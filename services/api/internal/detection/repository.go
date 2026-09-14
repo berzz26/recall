@@ -103,3 +103,29 @@ func (r *Repository) DeleteByFrameID(ctx context.Context, frameID uuid.UUID) err
 	_, err := r.db.Exec(ctx, `DELETE FROM video_frame_detections WHERE frame_id = $1`, frameID)
 	return err
 }
+
+func (r *Repository) GetBySegmentID(ctx context.Context, segmentID uuid.UUID) ([]Detection, error) {
+	query := fmt.Sprintf(`SELECT %s FROM video_frame_detections WHERE segment_id = $1 ORDER BY created_at ASC, id ASC`, fields)
+	rows, err := r.db.Query(ctx, query, segmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []Detection
+	for rows.Next() {
+		d, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, *d)
+	}
+	if list == nil {
+		list = []Detection{}
+	}
+	return list, rows.Err()
+}
+
+func (r *Repository) DeleteBySegmentID(ctx context.Context, segmentID uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `DELETE FROM video_frame_detections WHERE segment_id = $1`, segmentID)
+	return err
+}

@@ -6,7 +6,9 @@ func (h *Handler) SetupRoutes() *fiber.App {
 	router := fiber.New()
 
 	router.Post("/", h.Create)
+	router.Post("", h.Create)
 	router.Get("/", h.List)
+	router.Get("", h.List)
 	router.Get("/:id", h.Get)
 	router.Delete("/:id", h.Delete)
 

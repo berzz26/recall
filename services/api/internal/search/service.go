@@ -92,6 +92,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult
 			StartTime:   c.StartTime,
 			EndTime:     c.EndTime,
 			Description: c.Description,
+			MatchedText: extractMatchedText(query, c.Description),
 			Similarity:  c.Similarity,
 			Detections:  []DetectionInfo{},
 			Tracks:      []TrackInfo{},
@@ -130,6 +131,82 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult
 		results = []SearchResult{}
 	}
 	return results, nil
+}
+
+func extractMatchedText(query, description string) string {
+	desc := strings.TrimSpace(description)
+	if desc == "" || strings.TrimSpace(query) == "" {
+		return ""
+	}
+	lowerDesc := strings.ToLower(desc)
+	lowerQuery := strings.ToLower(strings.TrimSpace(query))
+	// tokenise query, keep tokens >=2 chars
+	tokens := strings.Fields(lowerQuery)
+	var filteredTokens []string
+	for _, t := range tokens {
+		t = strings.Trim(t, ".,!?;:\"'()[]{}")
+		if len(t) >= 2 {
+			filteredTokens = append(filteredTokens, t)
+		}
+	}
+	if len(filteredTokens) == 0 {
+		filteredTokens = strings.Fields(lowerQuery)
+	}
+	// find earliest token occurrence
+	earliestPos := -1
+	earliestLen := 0
+	for _, tok := range filteredTokens {
+		pos := strings.Index(lowerDesc, tok)
+		if pos >= 0 && (earliestPos == -1 || pos < earliestPos) {
+			earliestPos = pos
+			earliestLen = len(tok)
+		}
+	}
+	// also try full query phrase
+	if phrasePos := strings.Index(lowerDesc, lowerQuery); phrasePos >= 0 {
+		if earliestPos == -1 || phrasePos < earliestPos {
+			earliestPos = phrasePos
+			earliestLen = len(lowerQuery)
+		} else if phrasePos == earliestPos && len(lowerQuery) > earliestLen {
+			earliestLen = len(lowerQuery)
+		}
+	}
+	if earliestPos == -1 {
+		// no lexical match – fallback to first ~110 chars at word boundary (still exact substring for highlighting)
+		if len(desc) <= 110 {
+			return desc
+		}
+		cut := 110
+		// avoid cutting in middle of word
+		if idx := strings.LastIndex(desc[:cut], " "); idx > 60 {
+			cut = idx
+		}
+		return strings.TrimSpace(desc[:cut])
+	}
+	// expand window around match: ~30 chars before, ~70 after
+	start := earliestPos - 30
+	if start < 0 {
+		start = 0
+	} else {
+		// snap to previous word boundary
+		if sp := strings.LastIndex(desc[:start], " "); sp >= 0 && start-sp < 20 {
+			start = sp + 1
+		}
+	}
+	end := earliestPos + earliestLen + 70
+	if end > len(desc) {
+		end = len(desc)
+	} else {
+		if sp := strings.Index(desc[end:], " "); sp >= 0 && sp < 20 {
+			end = end + sp
+		}
+	}
+	snippet := strings.TrimSpace(desc[start:end])
+	// ensure snippet is exact substring of description (it is)
+	if len(snippet) < 10 {
+		return desc
+	}
+	return snippet
 }
 
 func (s *Service) enrichDetections(ctx context.Context, videoID uuid.UUID, segStart, segEnd float64) ([]DetectionInfo, error) {

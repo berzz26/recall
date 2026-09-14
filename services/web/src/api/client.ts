@@ -1,4 +1,4 @@
-const BASE = (import.meta.env.VITE_API_BASE_URL as string) || 'http://localhost:8080'
+const BASE = (import.meta.env.VITE_API_BASE_URL as string) || ''
 
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {

@@ -118,6 +118,22 @@ type qwenEvent struct {
 	End       *float64 `json:"end,omitempty"`
 }
 
+type qwenHistorySegment struct {
+	SegmentID    string        `json:"segment_id"`
+	SegmentIndex int           `json:"segment_index"`
+	StartTime    float64       `json:"start_time"`
+	EndTime      float64       `json:"end_time"`
+	Labels       []string      `json:"labels"`
+	Tracks       []qwenTrack   `json:"tracks"`
+	Events       []qwenEvent   `json:"events"`
+}
+
+type qwenHistory struct {
+	PriorSegments    []qwenHistorySegment `json:"prior_segments"`
+	PersistentTracks []qwenTrack          `json:"persistent_tracks"`
+	PriorEvents      []qwenEvent          `json:"prior_events"`
+}
+
 type qwenSegment struct {
 	SegmentID  string          `json:"segment_id"`
 	StartTime  float64         `json:"start_time"`
@@ -126,6 +142,7 @@ type qwenSegment struct {
 	Detections []qwenDetection `json:"detections"`
 	Tracks     []qwenTrack     `json:"tracks"`
 	Events     []qwenEvent     `json:"events"`
+	History    *qwenHistory    `json:"history,omitempty"`
 }
 
 type qwenInput struct {
@@ -262,9 +279,63 @@ func (q *SmolVLMDescriber) DescribeVideo(ctx context.Context, input VideoDescrip
 			events = []qwenEvent{}
 		}
 
+		// Build temporal history for Python (tracking as frame of reference)
+		var history *qwenHistory
+		if seg.History != nil {
+			var priorSegs []qwenHistorySegment
+			for _, ps := range seg.History.PriorSegments {
+				var pTracks []qwenTrack
+				for _, t := range ps.Tracks {
+					pTracks = append(pTracks, qwenTrack{Label: t.Label, TrackIndex: t.TrackIndex, Start: t.Start, End: t.End})
+				}
+				if pTracks == nil {
+					pTracks = []qwenTrack{}
+				}
+				var pEvents []qwenEvent
+				for _, e := range ps.Events {
+					pEvents = append(pEvents, qwenEvent{EventType: e.EventType, Label: e.Label, Start: e.Start, End: e.End})
+				}
+				if pEvents == nil {
+					pEvents = []qwenEvent{}
+				}
+				labels := ps.Labels
+				if labels == nil {
+					labels = []string{}
+				}
+				priorSegs = append(priorSegs, qwenHistorySegment{
+					SegmentID: ps.SegmentID.String(), SegmentIndex: ps.SegmentIndex,
+					StartTime: ps.StartTime, EndTime: ps.EndTime,
+					Labels: labels, Tracks: pTracks, Events: pEvents,
+				})
+			}
+			if priorSegs == nil {
+				priorSegs = []qwenHistorySegment{}
+			}
+			var persTracks []qwenTrack
+			for _, t := range seg.History.PersistentTracks {
+				persTracks = append(persTracks, qwenTrack{Label: t.Label, TrackIndex: t.TrackIndex, Start: t.Start, End: t.End})
+			}
+			if persTracks == nil {
+				persTracks = []qwenTrack{}
+			}
+			var priorEvents []qwenEvent
+			for _, e := range seg.History.PriorEvents {
+				priorEvents = append(priorEvents, qwenEvent{EventType: e.EventType, Label: e.Label, Start: e.Start, End: e.End})
+			}
+			if priorEvents == nil {
+				priorEvents = []qwenEvent{}
+			}
+			history = &qwenHistory{
+				PriorSegments:    priorSegs,
+				PersistentTracks: persTracks,
+				PriorEvents:      priorEvents,
+			}
+		}
+
 		segs = append(segs, qwenSegment{
 			SegmentID: seg.SegmentID.String(), StartTime: seg.StartTime, EndTime: seg.EndTime,
 			Frames: frames, Detections: dets, Tracks: tracks, Events: events,
+			History: history,
 		})
 	}
 

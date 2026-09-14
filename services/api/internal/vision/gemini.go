@@ -15,35 +15,34 @@ import (
 	"github.com/berzz26/recall/services/api/internal/storage"
 )
 
-// Canonical Recall vision prompt.
-const visionPrompt = `You are describing a CCTV video segment for a video search system.
+// Canonical Recall vision prompt — concise, temporally grounded semantic description optimized for retrieval.
+const visionPrompt = `Generate a concise semantic description optimized for video retrieval for this CCTV video segment.
 
 The supplied images are chronological representative frames from one continuous video segment.
-
-Describe what is visibly happening across the segment.
+You also receive bounded structured context: current detections/tracks/events for this segment, plus bounded temporal context (recent prior segment summaries, persistent tracks active before this segment, and recent prior events). This temporal context is CONTEXT FOR YOU to understand continuity — do NOT repeat it verbatim, do NOT list tracks/events, and do NOT expose track IDs, detector labels, confidence scores, or internal metadata in your answer. Use it only to determine whether an entity is continuing from a previous segment.
 
 The images are the primary evidence. Structured detector, tracking, and event metadata is supplemental context only. It may be incomplete or incorrect. Do not make a claim merely because metadata says something exists. Verify visual claims against the images.
 
+Describe in natural language as one concise paragraph, approximately 50-100 words, no bullets, no JSON, no frame-by-frame list. Return only the description.
+
+Content to cover when visibly supported and useful for retrieval:
+- Scene/context: what kind of environment/scene is visible, important objects/vehicles/people.
+- Salient entities: describe visually meaningful people/objects when relevant, including useful visible attributes (clothing, color, carried objects, approximate location) and where they are in the scene.
+- Activities/actions: what important entities are visibly doing, including meaningful interactions or actions.
+- Temporal change: meaningful movement, appearance, disappearance, or state changes across the supplied frames.
+- Cross-segment continuity: when tracking indicates the same entity continues from a previous segment AND the frames are visually consistent, use natural continuity language such as "the same person continues..." or "the person in the blue jacket moves..." Do NOT mention track IDs.
+
 Rules:
 - Describe only visible evidence.
-- Do not identify people.
-- Do not infer names or identities.
-- Do not infer intentions or motives.
-- Do not invent actions that are not visually supported.
-- Do not speculate about why something is happening.
+- Prioritize salient entities and actions useful for semantic retrieval. Do NOT force every detected person/track into the paragraph.
+- Do not identify real people or infer identities, names, intentions, or motives.
+- Do not invent actions that are not visually supported and do not speculate about why something is happening.
 - Use neutral language.
-- Mention important objects, people, vehicles, and scene activity.
-- Describe meaningful movement or changes across the supplied frames.
-- If people are present, describe their visible activity without identifying them.
-- Do not mention detector confidence scores.
-- Do not mention track IDs.
-- Do not mention internal metadata.
-- Do not mention that you are an AI.
-- Do not say that something is present if it is not visually supported.
 - If the scene is static, describe the visible scene concisely.
-- Do not produce a frame-by-frame list.
-- Produce one concise paragraph.
-- Maximum 100 words.
+- Do not say that something is present if it is not visually supported.
+- Do not mention detector confidence scores, track IDs, detector labels unless naturally useful, or internal implementation details.
+- Do not mention that you are an AI.
+- One paragraph, approximately 50-100 words. Maximum 100 words.
 
 Return only the description.`
 
@@ -83,6 +82,7 @@ func NewGeminiDescriber(model, modelVersion string, maxFrames, maxOutputTokens i
 // buildVisionPrompt mirrors workers/vision/describe.py build_context.
 func buildVisionPrompt(seg SegmentInput) string {
 	var lines []string
+	lines = append(lines, fmt.Sprintf("Current segment time: %.1fs to %.1fs (%.1fs duration)", seg.StartTime, seg.EndTime, seg.EndTime-seg.StartTime))
 	if len(seg.Detections) > 0 {
 		labelSet := map[string]struct{}{}
 		for _, d := range seg.Detections {
@@ -110,15 +110,25 @@ func buildVisionPrompt(seg SegmentInput) string {
 		lines = append(lines, "Visible detector labels in this segment:\nnone reported")
 	}
 	if len(seg.Tracks) > 0 {
-		lines = append(lines, "Tracks overlapping this segment (label, relative start, relative end):")
+		lines = append(lines, "Tracks overlapping this segment (label, absolute start, absolute end, duration, continuity):")
 		for _, t := range seg.Tracks {
-			lines = append(lines, fmt.Sprintf("- %s, %.1fs to %.1fs", t.Label, t.Start, t.End))
+			continuity := "new in this segment"
+			if seg.History != nil {
+				for _, pt := range seg.History.PersistentTracks {
+					if pt.TrackIndex == t.TrackIndex && pt.Label == t.Label && pt.Start < seg.StartTime {
+						continuity = fmt.Sprintf("continuing from %.1fs", pt.Start)
+						break
+					}
+				}
+			}
+			dur := t.End - t.Start
+			lines = append(lines, fmt.Sprintf("- %s track %d, %.1fs to %.1fs (%.1fs), %s", t.Label, t.TrackIndex, t.Start, t.End, dur, continuity))
 		}
 	} else {
 		lines = append(lines, "Tracks overlapping this segment: none")
 	}
 	if len(seg.Events) > 0 {
-		lines = append(lines, "Events in this segment (type, label, start, end):")
+		lines = append(lines, "Events in this segment (type, label, absolute start, end):")
 		for _, e := range seg.Events {
 			endS := "none"
 			if e.End != nil {
@@ -128,6 +138,51 @@ func buildVisionPrompt(seg SegmentInput) string {
 		}
 	} else {
 		lines = append(lines, "Events in this segment: none")
+	}
+	// Temporal history: prior segments, persistent tracks, prior events
+	if seg.History != nil {
+		if len(seg.History.PriorSegments) > 0 {
+			lines = append(lines, fmt.Sprintf("Temporal history: %d prior segment(s) before %.1fs:", len(seg.History.PriorSegments), seg.StartTime))
+			for _, ps := range seg.History.PriorSegments {
+				lab := "none"
+				if len(ps.Labels) > 0 {
+					lab = strings.Join(ps.Labels, ", ")
+				}
+				lines = append(lines, fmt.Sprintf("- Prior segment %d (%.1fs-%.1fs): labels [%s], %d track(s), %d event(s)", ps.SegmentIndex, ps.StartTime, ps.EndTime, lab, len(ps.Tracks), len(ps.Events)))
+				for _, pt := range ps.Tracks {
+					lines = append(lines, fmt.Sprintf("  * track %s %d: %.1fs-%.1fs", pt.Label, pt.TrackIndex, pt.Start, pt.End))
+				}
+				for _, pe := range ps.Events {
+					endS := "none"
+					if pe.End != nil {
+						endS = fmt.Sprintf("%.1fs", *pe.End)
+					}
+					lines = append(lines, fmt.Sprintf("  * event %s %s: %.1fs to %s", pe.EventType, pe.Label, pe.Start, endS))
+				}
+			}
+		} else {
+			lines = append(lines, "Temporal history: no prior segments (this is the first segment)")
+		}
+		if len(seg.History.PersistentTracks) > 0 {
+			lines = append(lines, fmt.Sprintf("Persistent tracks active before this segment (%d):", len(seg.History.PersistentTracks)))
+			for _, pt := range seg.History.PersistentTracks {
+				lines = append(lines, fmt.Sprintf("- %s track %d, %.1fs to %.1fs (%.1fs)", pt.Label, pt.TrackIndex, pt.Start, pt.End, pt.End-pt.Start))
+			}
+		} else {
+			lines = append(lines, "Persistent tracks before this segment: none")
+		}
+		if len(seg.History.PriorEvents) > 0 {
+			lines = append(lines, fmt.Sprintf("Prior events before this segment (%d):", len(seg.History.PriorEvents)))
+			for _, pe := range seg.History.PriorEvents {
+				endS := "none"
+				if pe.End != nil {
+					endS = fmt.Sprintf("%.1fs", *pe.End)
+				}
+				lines = append(lines, fmt.Sprintf("- %s %s: %.1fs to %s", pe.EventType, pe.Label, pe.Start, endS))
+			}
+		} else {
+			lines = append(lines, "Prior events before this segment: none")
+		}
 	}
 	return visionPrompt + "\n\nStructured context (compact):\n" + strings.Join(lines, "\n")
 }
