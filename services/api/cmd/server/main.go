@@ -91,7 +91,7 @@ func main() {
 		}
 	}
 	yolo := detector.NewYoloDetector(cfg.PythonPath, scriptPath, cfg.ModelPath, cfg.DetectionThreshold)
-	visualService := visual.NewService(detectionRepo, videoFrameRepo, store, yolo, cfg.DetectionThreshold, cfg.DetectorName, cfg.DetectorVersion)
+	visualService := visual.NewServiceWithBatchSize(detectionRepo, videoFrameRepo, store, yolo, cfg.DetectionThreshold, cfg.DetectorName, cfg.DetectorVersion, cfg.YOLOBatchSize)
 
 	trackRepo := video_track.NewRepository(db.DB)
 	selectedTracker, err := tracker.New(cfg.TrackerType, cfg.TrackerHighThreshold, cfg.TrackerLowThreshold, cfg.TrackerMatchThreshold, cfg.TrackerTrackBuffer)

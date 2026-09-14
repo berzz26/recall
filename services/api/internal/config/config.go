@@ -32,6 +32,7 @@ type Config struct {
 	DetectorVersion        string
 	ModelPath              string
 	PythonPath             string
+	YOLOBatchSize          int
 	EventMovementThreshold float64
 	VisionProvider         string
 	VisionPythonPath       string
@@ -187,6 +188,17 @@ func Load() Config {
 	pythonPath := os.Getenv("PYTHON_PATH")
 	if pythonPath == "" {
 		pythonPath = "python3"
+	}
+	yoloBatchSize := 16
+	if v := os.Getenv("YOLO_BATCH_SIZE"); v != "" {
+		parsed, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			panic(fmt.Sprintf("invalid YOLO_BATCH_SIZE %q: %v", v, err))
+		}
+		if parsed <= 0 {
+			panic(fmt.Sprintf("YOLO_BATCH_SIZE must be > 0, got %s", v))
+		}
+		yoloBatchSize = parsed
 	}
 
 	movementThreshold := 0.05
@@ -429,6 +441,7 @@ func Load() Config {
 		DetectorVersion:        detectorVersion,
 		ModelPath:              modelPath,
 		PythonPath:             pythonPath,
+		YOLOBatchSize:          yoloBatchSize,
 		EventMovementThreshold: movementThreshold,
 		VisionProvider:         visionProvider,
 		VisionPythonPath:       visionPythonPath,

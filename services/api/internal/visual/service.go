@@ -24,9 +24,14 @@ type Service struct {
 	threshold       float64
 	detectorName    string
 	detectorVersion string
+	batchSize       int
 }
 
 func NewService(detRepo *detection.Repository, frameRepo *video_frame.Repository, store storage.Storage, analyzer detector.VisualAnalyzer, threshold float64, name, version string) *Service {
+	return NewServiceWithBatchSize(detRepo, frameRepo, store, analyzer, threshold, name, version, 16)
+}
+
+func NewServiceWithBatchSize(detRepo *detection.Repository, frameRepo *video_frame.Repository, store storage.Storage, analyzer detector.VisualAnalyzer, threshold float64, name, version string, batchSize int) *Service {
 	if threshold < 0 || threshold > 1 {
 		threshold = 0.25
 	}
@@ -36,7 +41,10 @@ func NewService(detRepo *detection.Repository, frameRepo *video_frame.Repository
 	if version == "" {
 		version = "1"
 	}
-	return &Service{detectionRepo: detRepo, frameRepo: frameRepo, storage: store, analyzer: analyzer, threshold: threshold, detectorName: name, detectorVersion: version}
+	if batchSize <= 0 {
+		batchSize = 16
+	}
+	return &Service{detectionRepo: detRepo, frameRepo: frameRepo, storage: store, analyzer: analyzer, threshold: threshold, detectorName: name, detectorVersion: version, batchSize: batchSize}
 }
 
 func (s *Service) AnalyzeVideo(ctx context.Context, videoID uuid.UUID) ([]detection.Detection, error) {
@@ -55,103 +63,179 @@ func (s *Service) AnalyzeVideo(ctx context.Context, videoID uuid.UUID) ([]detect
 	if s.analyzer == nil {
 		return nil, fmt.Errorf("analyzer not configured")
 	}
-	slog.Info("visual: start", "video_id", videoID.String(), "frames", len(frames), "threshold", s.threshold, "detector", s.detectorName)
-	type tmpFile struct {
-		path  string
-		frame video_frame.VideoFrame
+	batchSize := s.batchSize
+	if batchSize <= 0 {
+		batchSize = 16
 	}
-	var tmps []tmpFile
-	var inputs []detector.FrameInput
-	cleanup := func() {
-		for _, t := range tmps {
-			os.Remove(t.path)
-		}
-	}
-	defer cleanup()
+	totalBatches := (len(frames) + batchSize - 1) / batchSize
+	slog.Info("visual: start", "video_id", videoID.String(), "frames", len(frames), "threshold", s.threshold, "detector", s.detectorName, "batch_size", batchSize, "batches", totalBatches)
 
-	for _, f := range frames {
-		rc, err := s.storage.Open(ctx, f.StorageKey)
+	// Load YOLO once per detection (per video) when using real detector.
+	// Persistent session keeps model loaded across bounded batches, preserving bounded memory
+	// while eliminating per-batch model reload overhead.
+	var sess *detector.Session
+	var useSession bool
+	if yolo, ok := s.analyzer.(*detector.YoloDetector); ok {
+		var err error
+		sess, err = yolo.NewSession(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("open frame %s: %w", f.ID, err)
+			return nil, fmt.Errorf("create detector session: %w", err)
 		}
-		ext := filepath.Ext(f.StorageKey)
-		if ext == "" {
-			ext = ".jpg"
-		}
-		tmp, err := os.CreateTemp("", "visual-*"+ext)
-		if err != nil {
-			rc.Close()
+		useSession = true
+		defer func() {
+			if cerr := sess.Close(); cerr != nil {
+				slog.Warn("visual: failed to close detector session", "video_id", videoID.String(), "error", cerr)
+			}
+		}()
+		slog.Info("visual: persistent detector session started", "video_id", videoID.String(), "batches", totalBatches)
+	}
+
+	var allSaved []detection.Detection
+	var totalAnalyzeMs int64
+	var totalPersistMs int64
+
+	for start := 0; start < len(frames); start += batchSize {
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if _, err := io.Copy(tmp, rc); err != nil {
+		end := start + batchSize
+		if end > len(frames) {
+			end = len(frames)
+		}
+		batchFrames := frames[start:end]
+		batchNum := start/batchSize + 1
+
+		type tmpFile struct {
+			path  string
+			frame video_frame.VideoFrame
+		}
+		var tmps []tmpFile
+		var inputs []detector.FrameInput
+
+		cleanup := func() {
+			for _, t := range tmps {
+				_ = os.Remove(t.path)
+			}
+		}
+
+		// Materialize bounded batch of frames from storage.
+		batchPrepStart := time.Now()
+		materializeFailed := false
+		var materializeErr error
+		for _, f := range batchFrames {
+			rc, err := s.storage.Open(ctx, f.StorageKey)
+			if err != nil {
+				materializeErr = fmt.Errorf("open frame %s: %w", f.ID, err)
+				materializeFailed = true
+				break
+			}
+			ext := filepath.Ext(f.StorageKey)
+			if ext == "" {
+				ext = ".jpg"
+			}
+			tmp, err := os.CreateTemp("", "visual-*"+ext)
+			if err != nil {
+				rc.Close()
+				materializeErr = err
+				materializeFailed = true
+				break
+			}
+			if _, err := io.Copy(tmp, rc); err != nil {
+				tmp.Close()
+				rc.Close()
+				_ = os.Remove(tmp.Name())
+				materializeErr = fmt.Errorf("copy frame %s: %w", f.ID, err)
+				materializeFailed = true
+				break
+			}
 			tmp.Close()
 			rc.Close()
-			os.Remove(tmp.Name())
-			return nil, fmt.Errorf("copy frame %s: %w", f.ID, err)
-		}
-		tmp.Close()
-		rc.Close()
-		p := tmp.Name()
-		tmps = append(tmps, tmpFile{path: p, frame: f})
-		inputs = append(inputs, detector.FrameInput{
-			FrameID: f.ID, VideoID: f.VideoID, SegmentID: f.SegmentID, Timestamp: f.TimestampSeconds, Width: f.Width, Height: f.Height, StorageKey: f.StorageKey, LocalPath: p,
-		})
-	}
-
-	prepMs := time.Since(visualStart).Milliseconds()
-	slog.Info("visual: frames prepared for detection", "video_id", videoID.String(), "frames", len(inputs), "prep_duration_ms", prepMs)
-	analyzeStart := time.Now()
-	results, err := s.analyzer.AnalyzeBatch(ctx, inputs)
-	analyzeMs := time.Since(analyzeStart).Milliseconds()
-	if err != nil {
-		slog.Error("visual: detection failed", "video_id", videoID.String(), "duration_ms", analyzeMs, "error", err)
-		return nil, fmt.Errorf("analyze: %w", err)
-	}
-	slog.Info("visual: detection complete", "video_id", videoID.String(), "frames", len(inputs), "duration_ms", analyzeMs)
-
-	var toInsert []detection.Detection
-	for _, f := range frames {
-		dets := results[f.ID]
-		for _, r := range dets {
-			if r.Confidence < s.threshold {
-				continue
-			}
-			if r.Label == "" {
-				continue
-			}
-			x, y, w, h := detection.ClampBBox(r.BBoxX, r.BBoxY, r.BBoxWidth, r.BBoxHeight)
-			if w <= 0 || h <= 0 {
-				continue
-			}
-			if r.Confidence < 0 || r.Confidence > 1 {
-				continue
-			}
-			toInsert = append(toInsert, detection.Detection{
-				VideoID: f.VideoID, SegmentID: f.SegmentID, FrameID: f.ID, Label: r.Label, Confidence: r.Confidence,
-				BBoxX: x, BBoxY: y, BBoxWidth: w, BBoxHeight: h,
-				DetectorName: s.detectorName, DetectorVersion: s.detectorVersion,
+			p := tmp.Name()
+			tmps = append(tmps, tmpFile{path: p, frame: f})
+			inputs = append(inputs, detector.FrameInput{
+				FrameID: f.ID, VideoID: f.VideoID, SegmentID: f.SegmentID, Timestamp: f.TimestampSeconds, Width: f.Width, Height: f.Height, StorageKey: f.StorageKey, LocalPath: p,
 			})
 		}
+		if materializeFailed {
+			cleanup()
+			return nil, materializeErr
+		}
+		prepMs := time.Since(batchPrepStart).Milliseconds()
+		slog.Info("visual: batch frames prepared", "video_id", videoID.String(), "batch", batchNum, "batches", totalBatches, "frames", len(inputs), "prep_duration_ms", prepMs)
+
+		analyzeStart := time.Now()
+		var results map[uuid.UUID][]detector.DetectionResult
+		if useSession {
+			results, err = sess.AnalyzeBatch(ctx, inputs)
+		} else {
+			results, err = s.analyzer.AnalyzeBatch(ctx, inputs)
+		}
+		analyzeMs := time.Since(analyzeStart).Milliseconds()
+		totalAnalyzeMs += analyzeMs
+		if err != nil {
+			cleanup()
+			slog.Error("visual: batch detection failed", "video_id", videoID.String(), "batch", batchNum, "batches", totalBatches, "duration_ms", analyzeMs, "error", err)
+			return nil, fmt.Errorf("analyze batch %d: %w", batchNum, err)
+		}
+		slog.Info("visual: batch detection complete", "video_id", videoID.String(), "batch", batchNum, "batches", totalBatches, "frames", len(inputs), "duration_ms", analyzeMs)
+
+		// Release temporary JPEGs and batch memory before persistence; detector has finished reading them.
+		cleanup()
+		// Clear tmps to avoid double-remove and allow GC; inputs still needed for mapping but will be dropped after this batch.
+		tmps = nil
+
+		var toInsert []detection.Detection
+		for _, f := range batchFrames {
+			dets := results[f.ID]
+			for _, r := range dets {
+				if r.Confidence < s.threshold {
+					continue
+				}
+				if r.Label == "" {
+					continue
+				}
+				x, y, w, h := detection.ClampBBox(r.BBoxX, r.BBoxY, r.BBoxWidth, r.BBoxHeight)
+				if w <= 0 || h <= 0 {
+					continue
+				}
+				if r.Confidence < 0 || r.Confidence > 1 {
+					continue
+				}
+				toInsert = append(toInsert, detection.Detection{
+					VideoID: f.VideoID, SegmentID: f.SegmentID, FrameID: f.ID, Label: r.Label, Confidence: r.Confidence,
+					BBoxX: x, BBoxY: y, BBoxWidth: w, BBoxHeight: h,
+					DetectorName: s.detectorName, DetectorVersion: s.detectorVersion,
+				})
+			}
+		}
+
+		persistStart := time.Now()
+		saved, err := s.detectionRepo.CreateBatch(ctx, toInsert)
+		persistMs := time.Since(persistStart).Milliseconds()
+		totalPersistMs += persistMs
+		if err != nil {
+			slog.Error("visual: batch persist failed", "video_id", videoID.String(), "batch", batchNum, "batches", totalBatches, "duration_ms", persistMs, "error", err)
+			return nil, fmt.Errorf("persist detections batch %d: %w", batchNum, err)
+		}
+		// Do not hold previous batch's temporary frames/inputs; release explicitly.
+		inputs = nil
+		toInsert = nil
+		allSaved = append(allSaved, saved...)
+		_ = prepMs
 	}
 
-	persistStart := time.Now()
-	saved, err := s.detectionRepo.CreateBatch(ctx, toInsert)
-	persistMs := time.Since(persistStart).Milliseconds()
-	if err != nil {
-		slog.Error("visual: persist failed", "video_id", videoID.String(), "duration_ms", persistMs, "error", err)
-		return nil, fmt.Errorf("persist detections: %w", err)
-	}
 	totalMs := time.Since(visualStart).Milliseconds()
 	slog.Info("visual: complete",
 		"video_id", videoID.String(),
 		"frames", len(frames),
-		"detections", len(saved),
-		"prep_ms", prepMs,
-		"analyze_ms", analyzeMs,
-		"persist_ms", persistMs,
+		"detections", len(allSaved),
+		"batches", totalBatches,
+		"batch_size", batchSize,
+		"analyze_ms", totalAnalyzeMs,
+		"persist_ms", totalPersistMs,
 		"total_duration_ms", totalMs,
 	)
-	return saved, nil
+	return allSaved, nil
 }
 
 func (s *Service) GetByVideoID(ctx context.Context, videoID uuid.UUID) ([]detection.Detection, error) {
