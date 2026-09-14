@@ -10,7 +10,7 @@ import (
 
 // ByteTrack implements the ByteTrack two-stage association in pure Go.
 // High/low split, Kalman prediction, Hungarian assignment, label-aware matching,
-// Tracked/Lost/Removed lifecycle with time-based buffer and MinHits confirmation.
+// Tracked/Lost/Removed lifecycle with count-based buffer and MinHits confirmation.
 type ByteTrack struct {
 	HighThreshold  float64
 	LowThreshold   float64
@@ -18,7 +18,6 @@ type ByteTrack struct {
 	TrackBuffer    int
 	FuseScore      bool
 	MinHits        int
-	BufferSeconds  float64
 }
 
 func NewByteTrack(high, low, match float64, buffer int, fuseScore bool, minHits int) *ByteTrack {
@@ -32,7 +31,6 @@ func NewByteTrack(high, low, match float64, buffer int, fuseScore bool, minHits 
 		TrackBuffer:    buffer,
 		FuseScore:      fuseScore,
 		MinHits:        minHits,
-		BufferSeconds:  float64(buffer) / 30.0,
 	}
 }
 
@@ -444,7 +442,7 @@ func (t *ByteTrack) Track(ctx context.Context, frames []FrameInput, detectionsBy
 		} else {
 			dt = 0
 		}
-		// Predict all Tracked and Lost
+		// Predict all Tracked and Lost (do not modify LastTimestamp/LastMatchedTime; they represent last actual match)
 		for _, tr := range active {
 			if tr.State == StateTracked || tr.State == StateLost || tr.State == StateNew {
 				if dt > 1e-6 {
@@ -453,8 +451,6 @@ func (t *ByteTrack) Track(ctx context.Context, frames []FrameInput, detectionsBy
 				// Update predicted bbox
 				pred := xyahToTLWH(tr.Mean, tr.Label)
 				tr.PredictedBBox = pred
-				// Preserve label and dimensions for fallback?
-				tr.LastTimestamp = fr.Timestamp
 			}
 		}
 
@@ -518,6 +514,7 @@ func (t *ByteTrack) Track(ctx context.Context, frames []FrameInput, detectionsBy
 					tr.State = StateTracked
 					tr.Hits++
 					tr.HitCount++
+					tr.Misses = 0
 					tr.LastMatchedTime = fr.Timestamp
 					tr.LastTimestamp = fr.Timestamp
 					assignments[d.ID] = tr.Index
@@ -558,6 +555,7 @@ func (t *ByteTrack) Track(ctx context.Context, frames []FrameInput, detectionsBy
 					tr.State = StateTracked
 					tr.Hits++
 					tr.HitCount++
+					tr.Misses = 0
 					tr.LastMatchedTime = fr.Timestamp
 					tr.LastTimestamp = fr.Timestamp
 					assignments[d.ID] = tr.Index
@@ -567,21 +565,19 @@ func (t *ByteTrack) Track(ctx context.Context, frames []FrameInput, detectionsBy
 			}
 		}
 
-		// Mark unmatched Tracked as Lost
+		// Mark unmatched tracks: increment consecutive misses, Tracked -> Lost
 		for _, tr := range trackedLost {
 			if matchedTrack[tr.Index] {
 				continue
 			}
-			// Only Tracked becomes Lost; Lost stays Lost; New stays New but will be considered for removal
 			if tr.State == StateTracked {
 				tr.State = StateLost
-				// Misses not used for time-based buffer, but keep for debugging
+				tr.Misses = 1
+			} else if tr.State == StateLost {
 				tr.Misses++
 			} else if tr.State == StateNew {
-				// New that didn't match high remains New; will be checked for removal via buffer
 				tr.Misses++
 			}
-			// Lost already Lost, keep misses? but time-based handles removal
 		}
 
 		// New tracks from unmatched high
@@ -630,10 +626,10 @@ func (t *ByteTrack) Track(ctx context.Context, frames []FrameInput, detectionsBy
 			}
 		}
 
-		// Remove Lost/ New tracks that exceed bufferSeconds (time-based, not frame count)
+		// Remove Lost/New that exceed TrackBuffer sampled observations (count-based, not wall-clock)
 		for _, tr := range active {
 			if tr.State == StateLost || tr.State == StateNew {
-				if fr.Timestamp-tr.LastMatchedTime > t.BufferSeconds+1e-9 {
+				if tr.Misses > t.TrackBuffer {
 					tr.State = StateRemoved
 				}
 			}
@@ -709,6 +705,8 @@ func gatingDistance(mean [8]float64, cov [8][8]float64, z [4]float64) float64 {
 
 const INF = 1e9
 
+const chiSquareThreshold = 9.4877
+
 func buildCostMatrixByteTrack(tracks []*btTrack, dets []DetectionInput, matchThreshold float64, fuseScore bool) [][]float64 {
 	nRows := len(tracks)
 	nCols := len(dets)
@@ -729,6 +727,11 @@ func buildCostMatrixByteTrack(tracks []*btTrack, dets []DetectionInput, matchThr
 		}
 		for j, d := range dets {
 			if tr.Label != d.Label {
+				continue
+			}
+			// Mahalanobis gating on predicted Kalman state (4-dim chi-square 95%)
+			z := tlwhToXyah(d)
+			if gatingDistance(tr.Mean, tr.Cov, z) > chiSquareThreshold {
 				continue
 			}
 			score := iouByteTrack(predBBox, d)

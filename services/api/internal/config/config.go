@@ -411,7 +411,7 @@ func Load() Config {
 		panic(fmt.Sprintf("invalid TRACKER_TYPE %q: must be one of [iou, bytetrack]", trackerType))
 	}
 
-	trackerHighThreshold := 0.6
+	trackerHighThreshold := 0.50
 	if v := os.Getenv("TRACKER_HIGH_THRESHOLD"); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
@@ -419,7 +419,7 @@ func Load() Config {
 		}
 		trackerHighThreshold = parsed
 	}
-	trackerLowThreshold := 0.1
+	trackerLowThreshold := 0.10
 	if v := os.Getenv("TRACKER_LOW_THRESHOLD"); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
@@ -427,7 +427,7 @@ func Load() Config {
 		}
 		trackerLowThreshold = parsed
 	}
-	trackerMatchThreshold := 0.8
+	trackerMatchThreshold := 0.30
 	if v := os.Getenv("TRACKER_MATCH_THRESHOLD"); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
@@ -435,7 +435,7 @@ func Load() Config {
 		}
 		trackerMatchThreshold = parsed
 	}
-	trackerTrackBuffer := 30
+	trackerTrackBuffer := 5
 	if v := os.Getenv("TRACKER_TRACK_BUFFER"); v != "" {
 		parsed, err := strconv.Atoi(v)
 		if err != nil {
